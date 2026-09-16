@@ -1,7 +1,14 @@
 #pragma once
 
 
+struct Passwords{
 
+
+
+
+
+    
+};
 
 
 
