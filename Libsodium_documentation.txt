@@ -1,0 +1,1512 @@
+Password hashing
+Secret keys used to encrypt or sign confidential data have to be chosen from a very large keyspace.
+
+However, passwords are usually short, human-generated strings, making dictionary attacks practical.
+
+Password hashing functions derive a secret key of any size from a password and salt.
+
+The generated key has the size defined by the application, no matter what the password length is.
+
+The same password hashed with the same parameters will always produce the same output.
+
+The same password hashed with different salts will produce different outputs.
+
+The function deriving a key from a password and salt is CPU intensive and intentionally requires a fair amount of memory. Therefore, it mitigates brute-force attacks by requiring a significant effort to verify each password.
+
+Common use cases:
+
+Password storage, or rather storing what it takes to verify a password without having to store the actual password.
+
+Deriving a secret key from a password; for example, for disk encryption.
+
+Sodium’s high-level crypto_pwhash_* API currently leverages the Argon2id function on all platforms. This can change at any point in time, but it is guaranteed that a given version of libsodium can verify all hashes produced by all previous versions from any platform. Applications don’t have to worry about backward compatibility.
+
+The more specific crypto_pwhash_scryptsalsa208sha256_* API uses the more conservative and widely deployed scrypt function.
+
+Argon2
+Argon2 is optimized for the x86 architecture and exploits the cache and memory organization of the recent Intel and AMD processors, but its implementation remains portable and fast on other architectures, except for JavaScript.
+
+Argon2 has three variants: Argon2d, Argon2i, and Argon2id. Libsodium supports Argon2i and Argon2id.
+
+Scrypt
+Scrypt was also designed to make it costly to perform large-scale custom hardware attacks by requiring large amounts of memory.
+
+Even though its memory hardness can be significantly reduced at the cost of extra computations, this function remains an excellent choice today, provided that its parameters are properly chosen.
+
+Server relief
+If multiple clients can simultaneously log in on a shared server, then the memory and computation requirements can exhaust the server’s resources.
+
+To mitigate this, passwords can be pre-hashed on the client (e.g. using libsodium.js in a web application):
+
+On user account creation, the server sends a random seed to the client. The client computes ph = password_hash(password, seed) and sends ph to the server. password_hash is a password hashing function tuned for the maximum memory and CPU usage the client can handle. The server stores the seed and password_hash'(ph, seed) for this user account. password_hash' is a password hashing function, whose parameters can be tuned for low memory and CPU usage.
+
+On a login attempt, the server sends the seed, or, for a non-existent user, a pseudorandom seed that must always be the same for a given username (for example, using crypto_generichash() with a key on the username as the message). The client computes ph = password_hash(password, seed) and sends it to the server. The server computes password_hash'(ph, seed) and compares it against what was stored in the database.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Password hashing
+The pwhash* API
+Sodium provides an API that can be used both for key derivation using a low-entropy input and password storage.
+
+Example 1: key derivation
+
+Copy
+#define PASSWORD "Correct Horse Battery Staple"
+#define KEY_LEN crypto_box_SEEDBYTES
+
+unsigned char salt[crypto_pwhash_SALTBYTES];
+unsigned char key[KEY_LEN];
+
+randombytes_buf(salt, sizeof salt);
+
+if (crypto_pwhash
+    (key, sizeof key, PASSWORD, strlen(PASSWORD), salt,
+     crypto_pwhash_OPSLIMIT_INTERACTIVE, crypto_pwhash_MEMLIMIT_INTERACTIVE,
+     crypto_pwhash_ALG_DEFAULT) != 0) {
+    /* out of memory */
+}
+Example 2: password storage
+
+Copy
+#define PASSWORD "Correct Horse Battery Staple"
+
+char hashed_password[crypto_pwhash_STRBYTES];
+
+if (crypto_pwhash_str
+    (hashed_password, PASSWORD, strlen(PASSWORD),
+     crypto_pwhash_OPSLIMIT_SENSITIVE, crypto_pwhash_MEMLIMIT_SENSITIVE) != 0) {
+    /* out of memory */
+}
+
+if (crypto_pwhash_str_verify
+    (hashed_password, PASSWORD, strlen(PASSWORD)) != 0) {
+    /* wrong password */
+}
+Key derivation
+
+Copy
+int crypto_pwhash(unsigned char * const out,
+                  unsigned long long outlen,
+                  const char * const passwd,
+                  unsigned long long passwdlen,
+                  const unsigned char * const salt,
+                  unsigned long long opslimit,
+                  size_t memlimit, int alg);
+The crypto_pwhash() function derives an outlen bytes long key from a password passwd whose length is passwdlen and a salt salt whose fixed length is crypto_pwhash_SALTBYTES bytes. passwdlen should be at least crypto_pwhash_PASSWD_MIN and crypto_pwhash_PASSWD_MAX. outlen should be at least crypto_pwhash_BYTES_MIN = 16 (128 bits) and at most crypto_pwhash_BYTES_MAX.
+
+The computed key is stored into out, representing the address of a dedicated storage area of outlen bytes.
+
+opslimit represents the maximum amount of computations to perform. Raising this number will make the function require more CPU cycles to compute a key. This number must be between crypto_pwhash_OPSLIMIT_MIN and crypto_pwhash_OPSLIMIT_MAX.
+
+memlimit is the maximum amount of RAM in bytes that the function will use. This number must be between crypto_pwhash_MEMLIMIT_MIN and crypto_pwhash_MEMLIMIT_MAX.
+
+alg is an identifier for the algorithm to use and should be set to one of the following values:
+
+crypto_pwhash_ALG_DEFAULT: the currently recommended algorithm, which can change from one version of libsodium to another.
+
+crypto_pwhash_ALG_ARGON2I13: version 1.3 of the Argon2i algorithm.
+
+crypto_pwhash_ALG_ARGON2ID13: version 1.3 of the Argon2id algorithm, available since libsodium 1.0.13.
+
+For interactive, online operations, crypto_pwhash_OPSLIMIT_INTERACTIVE and crypto_pwhash_MEMLIMIT_INTERACTIVE provide a baseline for these two parameters. This currently requires 64 MiB of dedicated RAM. Higher values may improve security (see below).
+
+Alternatively, crypto_pwhash_OPSLIMIT_MODERATE and crypto_pwhash_MEMLIMIT_MODERATE can be used. This requires 256 MiB of dedicated RAM and takes about 0.7 seconds on a 2.8 GHz Core i7 CPU.
+
+For highly sensitive data and non-interactive operations, crypto_pwhash_OPSLIMIT_SENSITIVE and crypto_pwhash_MEMLIMIT_SENSITIVE can be used. With these parameters, deriving a key takes about 3.5 seconds on a 2.8 GHz Core i7 CPU and requires 1024 MiB of dedicated RAM.
+
+The salt should be unpredictable. randombytes_buf() is the easiest way to fill the crypto_pwhash_SALTBYTES bytes of the salt.
+
+Keep in mind that to produce the same key from the same password, the same algorithm, the same salt, and the same values for opslimit and memlimit must be used. Therefore, these parameters must be stored for each user.
+
+The function returns 0 on success and -1 if the computation didn’t complete, usually because the operating system refused to allocate the amount of requested memory.
+
+Password storage
+
+Copy
+int crypto_pwhash_str(char out[crypto_pwhash_STRBYTES],
+                      const char * const passwd,
+                      unsigned long long passwdlen,
+                      unsigned long long opslimit,
+                      size_t memlimit);
+The crypto_pwhash_str() function puts an ASCII encoded string into out, which includes:
+
+the result of a memory-hard, CPU-intensive hash function applied to the password passwd of length passwdlen;
+
+the automatically generated salt used for the previous computation;
+
+the other parameters required to verify the password, including the algorithm identifier, its version, opslimit, and memlimit.
+
+out must be a dedicated storage area that’s large enough to hold crypto_pwhash_STRBYTES bytes, but the actual output string may be shorter.
+
+The output string is zero-terminated, includes only ASCII characters, and can be safely stored in SQL databases and other data stores. No extra information has to be stored to verify the password.
+
+The function returns 0 on success and -1 if it didn’t complete successfully.
+
+
+Copy
+int crypto_pwhash_str_verify(const char str[crypto_pwhash_STRBYTES],
+                             const char * const passwd,
+                             unsigned long long passwdlen);
+This function verifies that str is a valid password verification string (as generated by crypto_pwhash_str()) for passwd whose length is passwdlen.
+
+str must be zero-terminated.
+
+It returns 0 if the verification succeeds and -1 on error.
+
+
+Copy
+int crypto_pwhash_str_needs_rehash(const char str[crypto_pwhash_STRBYTES],
+                                   unsigned long long opslimit, size_t memlimit);
+Check if a password verification string str matches the parameters opslimit, memlimit, and the current default algorithm.
+
+The function returns 1 if the string appears to be correct but doesn’t match the given parameters. In that situation, applications may want to compute a new hash using the current parameters the next time the user logs in.
+
+The function returns 0 if the parameters already match the given ones.
+
+It returns -1 on error. If this happens, applications may want to compute a correct hash the next time the user logs in.
+
+Guidelines for choosing the parameters
+Start by determining how much memory the function can use. What will be the highest number of threads/processes evaluating the function simultaneously (ideally, no more than 1 per CPU core)? How much physical memory is guaranteed to be available?
+
+Set memlimit to the amount of memory you want to reserve for password hashing.
+
+Then set opslimit to 3 and measure the time it takes to hash a password.
+
+If this is way too long for your application, reduce memlimit, but keep opslimit set to 3.
+
+If the function is so fast that you can afford it to be more computationally intensive without any usability issues, then increase opslimit.
+
+For online use (e.g. logging in on a website), a 1 second computation is likely to be the acceptable maximum.
+
+For interactive use (e.g. a desktop application), a 5 second pause after having entered a password is acceptable if the password doesn’t need to be entered more than once per session.
+
+For non-interactive and infrequent use (e.g. restoring an encrypted backup), an even slower computation can be an option.
+
+However, the best defense against brute-force password cracking is to use strong passwords. Libraries such as passwdqc can help enforce this.
+
+Constants
+crypto_pwhash_ALG_ARGON2I13
+
+crypto_pwhash_ALG_ARGON2ID13
+
+crypto_pwhash_ALG_DEFAULT
+
+crypto_pwhash_BYTES_MAX
+
+crypto_pwhash_BYTES_MIN
+
+crypto_pwhash_MEMLIMIT_INTERACTIVE
+
+crypto_pwhash_MEMLIMIT_MAX
+
+crypto_pwhash_MEMLIMIT_MIN
+
+crypto_pwhash_MEMLIMIT_MODERATE
+
+crypto_pwhash_MEMLIMIT_SENSITIVE
+
+crypto_pwhash_OPSLIMIT_INTERACTIVE
+
+crypto_pwhash_OPSLIMIT_MAX
+
+crypto_pwhash_OPSLIMIT_MIN
+
+crypto_pwhash_OPSLIMIT_MODERATE
+
+crypto_pwhash_OPSLIMIT_SENSITIVE
+
+crypto_pwhash_PASSWD_MAX
+
+crypto_pwhash_PASSWD_MIN
+
+crypto_pwhash_SALTBYTES
+
+crypto_pwhash_STRBYTES
+
+crypto_pwhash_STRPREFIX
+
+Notes
+opslimit, the number of passes, must be at least 3 when using Argon2i.crypto_pwhash() and crypto_pwhash_str() will fail with a -1 return code for lower values.
+
+There is no “insecure” value for memlimit, though the more memory, the better.
+
+Do not forget to initialize the library with sodium_init(). crypto_pwhash_* will still work without doing so but possibly way slower.
+
+Do not use constants (including crypto_pwhash_OPSLIMIT_* and crypto_pwhash_MEMLIMIT_*) to verify a password or produce a deterministic output. Save the parameters, including the algorithm identifier, alongside the hash instead.
+
+By doing so, passwords can be rehashed using different parameters if required later on.
+
+For password verification, the recommended interface is crypto_pwhash_str() and crypto_pwhash_str_verify(). The string produced by crypto_pwhash_str() already includes an algorithm identifier and all the parameters, including the automatically generated salt, that were used to hash the password. Subsequently, crypto_pwhash_str_verify() automatically decodes these parameters
+
+Plaintext passwords should not stay in memory longer than needed.
+
+It is highly recommended to use sodium_mlock() to lock memory regions storing plaintext passwords and to call sodium_munlock() right after crypto_pwhash_str() and crypto_pwhash_str_verify() return.
+
+sodium_munlock() overwrites the region with zeros before unlocking it, so it must not be done before calling this function; otherwise, zeroes, instead of the password, would be hashed.
+
+Since version 1.0.15, libsodium’s default algorithm is Argon2id.
+
+Passwords should generally not be used for encryption. If that must be done, then read the AEADs section first.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Key derivation
+Deriving a key from a password
+Secret keys used to encrypt or sign confidential data have to be chosen from a very large keyspace. However, passwords are usually short, human-generated strings, making dictionary attacks practical.
+
+The pwhash operation derives a secret key of any size from a password and salt.
+
+Refer to the Password hashing section for more information and code examples.
+
+Deriving keys from a single high-entropy key
+Multiple secret subkeys can be derived from a single master key.
+
+Given the master key and a key identifier, a subkey can be deterministically computed. However, given a subkey, an attacker cannot compute the master key nor any other subkeys.
+
+The crypto_kdf API can derive up to 2^64 keys from a single master key and context, and individual subkeys can have an arbitrary length between 128 (16 bytes) and 512 bits (64 bytes).
+
+Example:
+
+
+Copy
+#define CONTEXT "Examples"
+
+uint8_t master_key[crypto_kdf_KEYBYTES];
+uint8_t subkey1[32];
+uint8_t subkey2[32];
+uint8_t subkey3[64];
+
+crypto_kdf_keygen(master_key);
+
+crypto_kdf_derive_from_key(subkey1, sizeof subkey1, 1, CONTEXT, master_key);
+crypto_kdf_derive_from_key(subkey2, sizeof subkey2, 2, CONTEXT, master_key);
+crypto_kdf_derive_from_key(subkey3, sizeof subkey3, 3, CONTEXT, master_key);
+Usage:
+
+
+Copy
+void crypto_kdf_keygen(uint8_t key[crypto_kdf_KEYBYTES]);
+The crypto_kdf_keygen() function creates a master key.
+
+
+Copy
+int crypto_kdf_derive_from_key(unsigned char *subkey, size_t subkey_len,
+                               uint64_t subkey_id,
+                               const char ctx[crypto_kdf_CONTEXTBYTES],
+                               const unsigned char key[crypto_kdf_KEYBYTES]);
+The crypto_kdf_derive_from_key() function derives a subkey_id-th subkey subkey of length subkey_len bytes using the master key key and the context ctx.
+
+subkey_id can be any value up to (2^64)-1. However, with 128-bit subkeys, it is not safe to derive more than 2^48 subkeys from the same key. With subkeys that are at 160 bits or more, 2^64 subkeys can be safely derived.
+
+subkey_len must be between crypto_kdf_BYTES_MIN (inclusive) and crypto_kdf_BYTES_MAX (inclusive).
+
+Similar to a type, the context ctx is an 8 character string describing what the key is going to be used for.
+
+Its purpose is to mitigate accidental bugs by separating domains. The same function used with the same key but in two distinct contexts is likely to generate two different outputs.
+
+Contexts don’t have to be secret and can have a low entropy.
+
+Examples of contexts include UserName, __auth__, pictures, and userdata.
+
+They must be crypto_kdf_CONTEXTBYTES bytes long.
+
+If more convenient, it is also fine to use a single global context for a whole application. This will still prevent the same keys from being mistakenly used by another application.
+
+Constants:
+
+crypto_kdf_PRIMITIVE
+
+crypto_kdf_BYTES_MIN
+
+crypto_kdf_BYTES_MAX
+
+crypto_kdf_CONTEXTBYTES
+
+crypto_kdf_KEYBYTES
+
+Algorithm details:
+
+BLAKE2B-subkeylen(key=key, message={}, salt=subkey_id || {0}, personal=ctx || {0})
+
+Nonce extension
+Unlike AEGIS-256, XSalsa20 (used by crypto_box_* and crypto_secretbox_*) and XChaCha20, ciphers such as AES-GCM and ChaCha20 require a nonce too short to be chosen randomly (64 or 96 bits). With 96-bit random nonces, 2^32 encryptions is the limit before the probability of duplicate nonces becomes too high.
+
+Using a counter instead of random nonces prevents this. However, keeping a state is not always an option, especially with offline protocols.
+
+As an alternative, the nonce can be extended: a key and part of a long nonce are used as inputs to a pseudorandom function to compute a new key. This subkey and the remaining bits of the long nonce can then be used as parameters for the cipher.
+
+For example, this allows using a 192-bit nonce with a cipher requiring a 64-bit nonce:
+
+
+Copy
+k = <key>
+n = <192-bit nonce>
+k' = PRF(k, n[0..127])
+c = E(k', n[128..191], m)
+Sodium also provides the crypto_core_hchacha20() function, which can be used as a PRF for that purpose:
+
+
+Copy
+int crypto_core_hchacha20(unsigned char *out, const unsigned char *in,
+                          const unsigned char *k, const unsigned char *c);
+This function accepts a 32-byte (crypto_core_hchacha20_KEYBYTES) secret key k as well as a 16-byte (crypto_core_hchacha20_INPUTBYTES) input in and outputs a 32-byte (crypto_core_hchacha20_OUTPUTBYTES) value indistinguishable from random data without knowing k.
+
+Optionally, a 16-byte (crypto_core_hchacha20_CONSTBYTES) constant c can be specified to personalize the function to an application. c can be left to NULL to use the default constant.
+
+The following code snippet illustrates how XChaCha20, the variant of ChaCha20-Poly1305 with a 192-bit nonce, is built:
+
+
+Copy
+#define MESSAGE (const unsigned char *) "message"
+#define MESSAGE_LEN 7
+
+unsigned char c[crypto_aead_chacha20poly1305_ABYTES + MESSAGE_LEN];
+unsigned char k[crypto_core_hchacha20_KEYBYTES];
+unsigned char k2[crypto_core_hchacha20_OUTPUTBYTES];
+unsigned char n[crypto_core_hchacha20_INPUTBYTES +
+                crypto_aead_chacha20poly1305_NPUBBYTES];
+
+randombytes_buf(k, sizeof k);
+randombytes_buf(n, sizeof n); /* 192-bits nonce */
+
+crypto_core_hchacha20(k2, n, k, NULL);
+
+assert(crypto_aead_chacha20poly1305_KEYBYTES <= sizeof k2);
+assert(crypto_aead_chacha20poly1305_NPUBBYTES ==
+       (sizeof n) - crypto_core_hchacha20_INPUTBYTES);
+
+crypto_aead_chacha20poly1305_encrypt(c, NULL, MESSAGE, MESSAGE_LEN,
+                                     NULL, 0, NULL,
+                                     n + crypto_core_hchacha20_INPUTBYTES,
+                                     k2);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Example (client-side)
+
+Copy
+unsigned char client_pk[crypto_kx_PUBLICKEYBYTES], client_sk[crypto_kx_SECRETKEYBYTES];
+unsigned char client_rx[crypto_kx_SESSIONKEYBYTES], client_tx[crypto_kx_SESSIONKEYBYTES];
+
+/* Generate the client's key pair */
+crypto_kx_keypair(client_pk, client_sk);
+
+/* Prerequisite after this point: the server's public key must be known by the client */
+
+/* Compute two shared keys using the server's public key and the client's secret key.
+   client_rx will be used by the client to receive data from the server,
+   client_tx will be used by the client to send data to the server. */
+if (crypto_kx_client_session_keys(client_rx, client_tx,
+                                  client_pk, client_sk, server_pk) != 0) {
+    /* Suspicious server public key, bail out */
+}
+Example (server-side)
+
+Copy
+unsigned char server_pk[crypto_kx_PUBLICKEYBYTES], server_sk[crypto_kx_SECRETKEYBYTES];
+unsigned char server_rx[crypto_kx_SESSIONKEYBYTES], server_tx[crypto_kx_SESSIONKEYBYTES];
+
+/* Generate the server's key pair */
+crypto_kx_keypair(server_pk, server_sk);
+
+/* Prerequisite after this point: the client's public key must be known by the server */
+
+/* Compute two shared keys using the client's public key and the server's secret key.
+   server_rx will be used by the server to receive data from the client,
+   server_tx will be used by the server to send data to the client. */
+if (crypto_kx_server_session_keys(server_rx, server_tx,
+                                  server_pk, server_sk, client_pk) != 0) {
+    /* Suspicious client public key, bail out */
+}
+Purpose
+Using the key exchange API, two parties can securely compute a set of shared keys using their peer’s public key and their own secret key.
+
+This API was introduced in libsodium 1.0.12.
+
+Usage
+
+Copy
+int crypto_kx_keypair(unsigned char pk[crypto_kx_PUBLICKEYBYTES],
+                      unsigned char sk[crypto_kx_SECRETKEYBYTES]);
+The crypto_kx_keypair() function creates a new key pair. It puts the public key into pk and the secret key into sk.
+
+
+Copy
+int crypto_kx_seed_keypair(unsigned char pk[crypto_kx_PUBLICKEYBYTES],
+                           unsigned char sk[crypto_kx_SECRETKEYBYTES],
+                           const unsigned char seed[crypto_kx_SEEDBYTES]);
+The crypto_kx_seed_keypair() function computes a deterministic key pair from the seed seed (crypto_kx_SEEDBYTES bytes).
+
+
+Copy
+int crypto_kx_client_session_keys(unsigned char rx[crypto_kx_SESSIONKEYBYTES],
+                                  unsigned char tx[crypto_kx_SESSIONKEYBYTES],
+                                  const unsigned char client_pk[crypto_kx_PUBLICKEYBYTES],
+                                  const unsigned char client_sk[crypto_kx_SECRETKEYBYTES],
+                                  const unsigned char server_pk[crypto_kx_PUBLICKEYBYTES]);
+The crypto_kx_client_session_keys() function computes a pair of shared keys (rx and tx) using the client’s public key client_pk, the client’s secret key client_sk, and the server’s public key server_pk.
+
+It returns 0 on success and -1 if the server’s public key is not acceptable.
+
+These keys can be used by any functions requiring secret keys up to crypto_kx_SESSIONKEYBYTES bytes, including crypto_secretbox_*() and crypto_aead_*().
+
+The shared secret key rx should be used by the client to receive data from the server, whereas tx should be used for data flowing in the opposite direction.
+
+rx and tx are both crypto_kx_SESSIONKEYBYTES bytes long. If only one session key is required, either rx or tx can be set to NULL.
+
+
+Copy
+int crypto_kx_server_session_keys(unsigned char rx[crypto_kx_SESSIONKEYBYTES],
+                                  unsigned char tx[crypto_kx_SESSIONKEYBYTES],
+                                  const unsigned char server_pk[crypto_kx_PUBLICKEYBYTES],
+                                  const unsigned char server_sk[crypto_kx_SECRETKEYBYTES],
+                                  const unsigned char client_pk[crypto_kx_PUBLICKEYBYTES]);
+The crypto_kx_server_session_keys() function computes a pair of shared keys (rx and tx) using the server’s public key server_pk, the server’s secret key server_sk, and the client’s public key client_pk.
+
+It returns 0 on success and -1 if the client’s public key is not acceptable.
+
+The shared secret key rx should be used by the server to receive data from the client, whereas tx should be used for data flowing in the opposite direction.
+
+rx and tx are both crypto_kx_SESSIONKEYBYTES bytes long. If only one session key is required, either rx or tx can be set to NULL.
+
+Constants
+crypto_kx_PUBLICKEYBYTES
+
+crypto_kx_SECRETKEYBYTES
+
+crypto_kx_SEEDBYTES
+
+crypto_kx_SESSIONKEYBYTES
+
+crypto_kx_PRIMITIVE
+
+Algorithm details
+Let p.n be the crypto_scalarmult_curve25519_BYTES byte output of the X25519 key exchange operation. The 512-bit output of BLAKE2B-512 is split into two 256-bit keys client_rx and client_tx.
+
+client_rx = server_tx and client_tx = server_rx.
+
+client_rx || client_tx = BLAKE2B-512(p.n || client_pk || server_pk)
+
+Notes
+For earlier versions of the library that didn’t implement this API, the X25519 function is accessible directly using the crypto_scalarmult_*() API.
+
+Having different keys for each direction allows counters to be safely used as nonces without having to wait for an acknowledgment after every message.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Secure memory
+Zeroing memory
+
+Copy
+void sodium_memzero(void * const pnt, const size_t len);
+After use, sensitive data should be overwritten, but memset() and hand-written code can be silently stripped out by an optimizing compiler or the linker.
+
+The sodium_memzero() function tries to effectively zero len bytes starting at pnt, even if optimizations are being applied to the code.
+
+Locking memory
+
+Copy
+int sodium_mlock(void * const addr, const size_t len);
+The sodium_mlock() function locks at least len bytes of memory starting at addr. This can help avoid swapping sensitive data to disk.
+
+In addition, it is recommended to disable swap partitions on machines processing sensitive data or, as a second choice, use encrypted swap partitions.
+
+For similar reasons, on Unix systems, one should also disable core dumps when running crypto code outside a development environment. This can be achieved using a shell built-in such as ulimit or programmatically using setrlimit(RLIMIT_CORE, &(struct rlimit) {0, 0}). On operating systems where this feature is implemented, kernel crash dumps should also be disabled.
+
+sodium_mlock() wraps mlock() and VirtualLock(). Note: Many systems place limits on the amount of memory that may be locked by a process. Care should be taken to raise those limits (e.g. Unix ulimits) where necessary. sodium_mlock() will return -1 when any limit is reached.
+
+
+Copy
+int sodium_munlock(void * const addr, const size_t len);
+The sodium_munlock() function should be called after locked memory is not being used anymore. It will zero len bytes starting at addr before flagging the pages as swappable again. Calling sodium_memzero() prior to sodium_munlock() is thus not required.
+
+On systems where it is supported, sodium_mlock() also wraps madvise() and advises the kernel not to include the locked memory in core dumps. sodium_munlock() also undoes this additional protection.
+
+Guarded heap allocations
+Sodium provides heap allocation functions for storing sensitive data.
+
+These are not general-purpose allocation functions. In particular, they are slower than malloc() and friends and require 3 or 4 extra pages of virtual memory.
+
+sodium_init() must be called before using any of the guarded heap allocation functions.
+
+
+Copy
+void *sodium_malloc(size_t size);
+The sodium_malloc() function returns a pointer from which exactly size contiguous bytes of memory can be accessed. Like normal malloc, NULL may be returned and errno set if it is not possible to allocate enough memory.
+
+The allocated region is placed at the end of a page boundary, immediately followed by a guard page (or an emulation, if unsupported by the platform). As a result, accessing memory past the end of the region will immediately terminate the application.
+
+A canary is also placed right before the returned pointer. Modifications of this canary are detected when trying to free the allocated region with sodium_free() and cause the application to immediately terminate.
+
+If supported by the platform, an additional guard page is placed before this canary to make it less likely for sensitive data to be accessible when reading past the end of an unrelated region.
+
+The allocated region is filled with 0xdb bytes to help catch bugs due to uninitialized data.
+
+In addition, mlock() is called on the region to help avoid it being swapped to disk. Note however that mlock() may not be supported, may fail or may be a no-op, in which case sodium_malloc() will return the memory regardless, but it will not be locked. If you specifically need to rely on memory locking, consider calling sodium_mlock() and checking its return value.
+
+On operating systems supporting MAP_NOCORE or MADV_DONTDUMP, memory allocated this way will also not be part of core dumps.
+
+The returned address will not be aligned if the allocation size is not a multiple of the required alignment.
+
+For this reason, sodium_malloc() should not be used with packed or variable-length structures unless the size given to sodium_malloc() is rounded up to ensure proper alignment.
+
+All the structures used by libsodium can safely be allocated using sodium_malloc().
+
+Allocating 0 bytes is a valid operation. It returns a pointer that can be successfully passed to sodium_free().
+
+
+Copy
+void *sodium_allocarray(size_t count, size_t size);
+The sodium_allocarray() function returns a pointer from which count objects that are size bytes of memory each can be accessed.
+
+It provides the same guarantees as sodium_malloc() but also protects against arithmetic overflows when count * size exceeds SIZE_MAX.
+
+
+Copy
+void sodium_free(void *ptr);
+The sodium_free() function unlocks and deallocates memory allocated using sodium_malloc() or sodium_allocarray().
+
+Before this, the canary is checked to detect possible buffer underflows and terminate the process if required.
+
+sodium_free() also fills the memory region with zeros before the deallocation.
+
+This function can be called even if the region was previously protected using sodium_mprotect_readonly(); the protection will automatically be changed as needed.
+
+ptr can be NULL, in which case no operation is performed.
+
+
+Copy
+int sodium_mprotect_noaccess(void *ptr);
+The sodium_mprotect_noaccess() function makes a region allocated using sodium_malloc() or sodium_allocarray() inaccessible. It cannot be read or written, but the data are preserved.
+
+This function can be used to make confidential data inaccessible except when needed for a specific operation.
+
+
+Copy
+int sodium_mprotect_readonly(void *ptr);
+The sodium_mprotect_readonly() function marks a region allocated using sodium_malloc() or sodium_allocarray() as read-only.
+
+Attempting to modify the data will cause the process to terminate.
+
+
+Copy
+int sodium_mprotect_readwrite(void *ptr);
+The sodium_mprotect_readwrite() function marks a region allocated using sodium_malloc() or sodium_allocarray() as readable and writable after having been protected using sodium_mprotect_readonly() or sodium_mprotect_noaccess().
+
+Notes on memory locking
+While mlock() and sodium_mlock() are useful for preventing heap-allocated data from being swapped to disk, they have important limitations that developers should understand.
+
+First, mlock() only protects heap-allocated data, not data on the stack or in CPU registers. Even when sensitive data is stored in locked heap pages, it will be copied to registers and potentially the stack when actually used.
+
+The stack cannot be reliably locked with mlock() because it only locks existing pages at the time of the call—if the stack later grows, new pages will not be locked.
+
+Protecting CPU registers from being swapped is fundamentally impossible with current operating system interfaces, as they may be saved to the stack during context switches, interrupt handling, or when the kernel pages out a process.
+
+As a mitigation, sodium_stackzero() can be called after a batch of sensitive operations to wipe the stack and remove any sensitive data that may have been temporarily stored there.
+
+Second, memory locking is constrained by the RLIMIT_MEMLOCK resource limit, which restricts the amount of memory a process can lock. On some systems, raising this limit requires the CAP_IPC_LOCK capability.
+
+If a process exceeds this limit, mlock() will fail and return ENOMEM. Applications that need to lock substantial amounts of memory must ensure the limit is appropriately configured.
+
+For applications that require comprehensive protection of the stack, one approach is to lock all memory in the process using mlockall(MCL_CURRENT | MCL_FUTURE). The MCL_CURRENT flag locks all currently mapped pages, while MCL_FUTURE ensures that all pages mapped in the future are also locked.
+
+However, this approach increases memory pressure, may require elevated resource limits, and can impact application performance.
+
+Therefore, if cold boot attacks or at-rest data protection are serious concerns for your threat model, the most effective defense is to encrypt the entire disk volume and encrypt the swap partition (or disable swap entirely).
+
+Additionally, hibernation should be completely disabled on systems running sensitive applications, as it writes the entire contents of RAM to disk and completely bypasses all memory locking protections.
+
+Encryption at rest ensures that even if memory contents are written to disk, they remain protected. Memory locking should be viewed as a defense-in-depth measure, not a complete solution for preventing sensitive data from ever reaching persistent storage.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Generating random data
+The library provides a set of functions to generate unpredictable data, suitable for creating secret keys.
+
+On Windows systems, the RtlGenRandom() function is used.
+
+On OpenBSD, the arc4random() function is used.
+
+On recent FreeBSD and Linux kernels, the getrandom system call is used.
+
+On other Unices, the /dev/urandom device is used.
+
+If none of these options can safely be used, custom implementations can easily be hooked.
+
+Usage
+
+Copy
+uint32_t randombytes_random(void);
+The randombytes_random() function returns an unpredictable value between 0 and 0xffffffff (included).
+
+
+Copy
+uint32_t randombytes_uniform(const uint32_t upper_bound);
+The randombytes_uniform() function returns an unpredictable value between 0 and upper_bound (excluded). Unlike randombytes_random() % upper_bound, it guarantees a uniform distribution of the possible output values even when upper_bound is not a power of 2. Note that an upper_bound < 2 leaves only a single element to be chosen, namely 0.
+
+
+Copy
+void randombytes_buf(void * const buf, const size_t size);
+The randombytes_buf() function fills size bytes starting at buf with an unpredictable sequence of bytes.
+
+
+Copy
+void randombytes_buf_deterministic(void * const buf, const size_t size,
+                                   const unsigned char seed[randombytes_SEEDBYTES]);
+The randombytes_buf_deterministic function stores size bytes into buf indistinguishable from random bytes without knowing seed.
+
+For a given seed, this function will always output the same sequence. size can be up to 2^38 (256 GB).
+
+seed is randombytes_SEEDBYTES bytes long.
+
+This function is mainly useful for writing tests and was introduced in libsodium 1.0.12. Under the hood, it uses the ChaCha20 stream cipher.
+
+Up to 256 GB can be produced with a single seed.
+
+
+Copy
+int randombytes_close(void);
+This deallocates the global resources used by the pseudo-random number generator. More specifically, when the /dev/urandom device is used, it closes the descriptor. Explicitly calling this function is almost never required.
+
+
+Copy
+void randombytes_stir(void);
+The randombytes_stir() function reseeds the pseudo-random number generator if it supports this operation. Calling this function is not required with the default generator, even after a fork() call, unless the descriptor for /dev/urandom was closed using randombytes_close().
+
+If a non-default implementation is being used (see randombytes_set_implementation()), randombytes_stir() must be called by the child after a fork() call.
+
+Note
+If this is used in an application inside a VM, and the VM is snapshotted and restored, then the above functions may produce the same output.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Authenticated encryption
+Example
+
+Copy
+#define MESSAGE ((const unsigned char *) "test")
+#define MESSAGE_LEN 4
+#define CIPHERTEXT_LEN (crypto_secretbox_MACBYTES + MESSAGE_LEN)
+
+unsigned char key[crypto_secretbox_KEYBYTES];
+unsigned char nonce[crypto_secretbox_NONCEBYTES];
+unsigned char ciphertext[CIPHERTEXT_LEN];
+
+crypto_secretbox_keygen(key);
+randombytes_buf(nonce, sizeof nonce);
+crypto_secretbox_easy(ciphertext, MESSAGE, MESSAGE_LEN, nonce, key);
+
+unsigned char decrypted[MESSAGE_LEN];
+if (crypto_secretbox_open_easy(decrypted, ciphertext, CIPHERTEXT_LEN, nonce, key) != 0) {
+    /* message forged! */
+}
+Purpose
+This operation:
+
+Encrypts a message with a key and a nonce to keep it confidential
+
+Computes an authentication tag. This tag is used to make sure that the message hasn’t been tampered with before decrypting it.
+
+A single key is used both to encrypt/authenticate and verify/decrypt messages. For this reason, it is critical to keep the key confidential.
+
+The nonce doesn’t have to be confidential, but it should never ever be reused with the same key. The easiest way to generate a nonce is to use randombytes_buf().
+
+Messages encrypted are assumed to be independent. If multiple messages are sent using this API and random nonces, there will be no way to detect if a message has been received twice, or if messages have been reordered. If this is a requirement, see the encrypting a sequence of a set of related messages section.
+
+Combined mode
+In combined mode, the authentication tag and the encrypted message are stored together. This is usually what you want.
+
+
+Copy
+int crypto_secretbox_easy(unsigned char *c, const unsigned char *m,
+                          unsigned long long mlen, const unsigned char *n,
+                          const unsigned char *k);
+The crypto_secretbox_easy() function encrypts a message m whose length is mlen bytes, with a key k and a nonce n.
+
+k should be crypto_secretbox_KEYBYTES bytes and n should be crypto_secretbox_NONCEBYTES bytes.
+
+c should be at least crypto_secretbox_MACBYTES + mlen bytes long.
+
+This function writes the authentication tag, whose length is crypto_secretbox_MACBYTES bytes, in c, immediately followed by the encrypted message, whose length is the same as the plaintext: mlen.
+
+c and m can overlap, making in-place encryption possible. However do not forget that crypto_secretbox_MACBYTES extra bytes are required to prepend the tag.
+
+
+Copy
+int crypto_secretbox_open_easy(unsigned char *m, const unsigned char *c,
+                               unsigned long long clen, const unsigned char *n,
+                               const unsigned char *k);
+The crypto_secretbox_open_easy() function verifies and decrypts a ciphertext produced by crypto_secretbox_easy().
+
+c is a pointer to an authentication tag + encrypted message combination, as produced by crypto_secretbox_easy(). clen is the length of this authentication tag + encrypted message combination. Put differently, clen is the number of bytes written by crypto_secretbox_easy(), which is crypto_secretbox_MACBYTES + the length of the message.
+
+The nonce n and the key k have to match those used to encrypt and authenticate the message.
+
+The function returns -1 if the verification fails, and 0 on success. On success, the decrypted message is stored into m.
+
+m and c can overlap, making in-place decryption possible.
+
+Detached mode
+Some applications may need to store the authentication tag and the encrypted message at different locations.
+
+For this specific use case, “detached” variants of the functions above are available.
+
+
+Copy
+int crypto_secretbox_detached(unsigned char *c, unsigned char *mac,
+                              const unsigned char *m,
+                              unsigned long long mlen,
+                              const unsigned char *n,
+                              const unsigned char *k);
+This function encrypts a message m of length mlen with a key k and a nonce n, and puts the encrypted message into c. Exactly mlen bytes will be put into c, since this function does not prepend the authentication tag. The tag, whose size is crypto_secretbox_MACBYTES bytes, will be put into mac.
+
+
+Copy
+int crypto_secretbox_open_detached(unsigned char *m,
+                                   const unsigned char *c,
+                                   const unsigned char *mac,
+                                   unsigned long long clen,
+                                   const unsigned char *n,
+                                   const unsigned char *k);
+The crypto_secretbox_open_detached() function verifies and decrypts an encrypted message c whose length is clen. clen doesn’t include the tag, so this length is the same as the plaintext.
+
+The plaintext is put into m after verifying that mac is a valid authentication tag for this ciphertext, with the given nonce n and key k.
+
+The function returns -1 if the verification fails, or 0 on success.
+
+
+Copy
+void crypto_secretbox_keygen(unsigned char k[crypto_secretbox_KEYBYTES]);
+This helper function introduced in libsodium 1.0.12 creates a random key k.
+
+It is equivalent to calling randombytes_buf() but improves code clarity and can prevent misuse by ensuring that the provided key length is always be correct.
+
+Constants
+crypto_secretbox_KEYBYTES
+
+crypto_secretbox_MACBYTES
+
+crypto_secretbox_NONCEBYTES
+
+Algorithm details
+Encryption: XSalsa20 stream cipher
+
+Authentication: Poly1305 MAC
+
+Notes
+Internally, crypto_secretbox calls crypto_stream_xor() to encrypt the message. As a result, a secret key used with the former should not be reused with the later. But as a general rule, a key should not be reused for different purposes.
+
+The original NaCl crypto_secretbox API is also supported, albeit not recommended.
+
+crypto_secretbox() takes a pointer to 32 bytes before the message, and stores the ciphertext 16 bytes after the destination pointer, the first 16 bytes being overwritten with zeros. crypto_secretbox_open() takes a pointer to 16 bytes before the ciphertext and stores the message 32 bytes after the destination pointer, overwriting the first 32 bytes with zeros.
+
+The _easy and _detached APIs are faster and improve usability by not requiring padding, copying or tricky pointer arithmetic.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Encrypted streams and file encryption
+This high-level API encrypts a sequence of messages, or a single message split into an arbitrary number of chunks, using a secret key, with the following properties:
+
+Messages cannot be truncated, removed, reordered, duplicated or modified without this being detected by the decryption functions.
+
+The same sequence encrypted twice will produce different ciphertexts.
+
+An authentication tag is added to each encrypted message: stream corruption will be detected early, without having to read the stream until the end.
+
+Each message can include additional data (ex: timestamp, protocol version) in the computation of the authentication tag.
+
+Messages can have different sizes.
+
+There are no practical limits to the total length of the stream, or to the total number of individual messages.
+
+Ratcheting: at any point in the stream, it is possible to “forget” the key used to encrypt the previous messages, and switch to a new key.
+
+This API can be used to securely send an ordered sequence of messages to a peer. Since the length of the stream is not limited, it can also be used to encrypt files regardless of their size.
+
+It transparently generates nonces and automatically handles key rotation.
+
+The crypto_secretstream_*() API was introduced in libsodium 1.0.14.
+
+Example (stream encryption)
+
+Copy
+#define MESSAGE_PART1 (const unsigned char *) "Arbitrary data to encrypt"
+#define MESSAGE_PART1_LEN    25
+#define CIPHERTEXT_PART1_LEN MESSAGE_PART1_LEN + crypto_secretstream_xchacha20poly1305_ABYTES
+
+#define MESSAGE_PART2 (const unsigned char *) "split into"
+#define MESSAGE_PART2_LEN    10
+#define CIPHERTEXT_PART2_LEN MESSAGE_PART2_LEN + crypto_secretstream_xchacha20poly1305_ABYTES
+
+#define MESSAGE_PART3 (const unsigned char *) "three messages"
+#define MESSAGE_PART3_LEN    14
+#define CIPHERTEXT_PART3_LEN MESSAGE_PART3_LEN + crypto_secretstream_xchacha20poly1305_ABYTES
+
+crypto_secretstream_xchacha20poly1305_state state;
+unsigned char key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
+unsigned char header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+unsigned char c1[CIPHERTEXT_PART1_LEN],
+              c2[CIPHERTEXT_PART2_LEN],
+              c3[CIPHERTEXT_PART3_LEN];
+
+/* Shared secret key required to encrypt/decrypt the stream */
+crypto_secretstream_xchacha20poly1305_keygen(key);
+
+/* Set up a new stream: initialize the state and create the header */
+crypto_secretstream_xchacha20poly1305_init_push(&state, header, key);
+
+/* Now, encrypt the first chunk. `c1` will contain an encrypted,
+ * authenticated representation of `MESSAGE_PART1`. */
+crypto_secretstream_xchacha20poly1305_push
+ (&state, c1, NULL, MESSAGE_PART1, MESSAGE_PART1_LEN, NULL, 0, 0);
+
+/* Encrypt the second chunk. `c2` will contain an encrypted, authenticated
+ * representation of `MESSAGE_PART2`. */
+crypto_secretstream_xchacha20poly1305_push
+ (&state, c2, NULL, MESSAGE_PART2, MESSAGE_PART2_LEN, NULL, 0, 0);
+
+/* Encrypt the last chunk, and store the ciphertext into `c3`.
+ * Note the `TAG_FINAL` tag to indicate that this is the final chunk. */
+crypto_secretstream_xchacha20poly1305_push
+ (&state, c3, NULL, MESSAGE_PART3, MESSAGE_PART3_LEN, NULL, 0,
+  crypto_secretstream_xchacha20poly1305_TAG_FINAL);
+Example (stream decryption)
+
+Copy
+unsigned char tag;
+unsigned char m1[MESSAGE_PART1_LEN],
+              m2[MESSAGE_PART2_LEN],
+              m3[MESSAGE_PART3_LEN];
+
+/* Decrypt the stream: initializes the state, using the key and a header */
+if (crypto_secretstream_xchacha20poly1305_init_pull(&state, header, key) != 0) {
+    /* Invalid header, no need to go any further */
+}
+
+/* Decrypt the first chunk. A real application would probably use
+ * a loop, that reads data from the network or from disk, and exits after
+ * an error, or after the last chunk (with a `TAG_FINAL` tag) has been
+ * decrypted. */
+if (crypto_secretstream_xchacha20poly1305_pull
+    (&state, m1, NULL, &tag, c1, CIPHERTEXT_PART1_LEN, NULL, 0) != 0) {
+   /* Invalid/incomplete/corrupted ciphertext - abort */
+}
+assert(tag == 0); /* The tag is the one we attached to this chunk: 0 */
+
+/* Decrypt the second chunk, store the result into `m2` */
+if (crypto_secretstream_xchacha20poly1305_pull
+    (&state, m2, NULL, &tag, c2, CIPHERTEXT_PART2_LEN, NULL, 0) != 0) {
+    /* Invalid/incomplete/corrupted ciphertext - abort */
+}
+assert(tag == 0); /* Not the end of the stream yet */
+
+/* Decrypt the last chunk, store the result into `m3` */
+if (crypto_secretstream_xchacha20poly1305_pull
+    (&state, m3, NULL, &tag, c3, CIPHERTEXT_PART3_LEN, NULL, 0) != 0) {
+    /* Invalid/incomplete/corrupted ciphertext - abort */
+}
+/* The tag indicates that this is the final chunk, no need to read and decrypt more */
+assert(tag == crypto_secretstream_xchacha20poly1305_TAG_FINAL);
+See down below for a complete example of file encryption/decryption using the secretstream API.
+
+Usage
+The crypto_secretstream_*_push() function set creates an encrypted stream. The crypto_secretstream_*_pull() function set is the decryption counterpart.
+
+An encrypted stream starts with a short header, whose size is crypto_secretstream_xchacha20poly1305_HEADERBYTES bytes. That header must be sent/stored before the sequence of encrypted messages, as it is required to decrypt the stream. The header content doesn’t have to be secret and decryption with a different header would fail.
+
+A tag is attached to each message. That tag can be any of:
+
+0, or crypto_secretstream_xchacha20poly1305_TAG_MESSAGE: the most common tag, that doesn’t add any information about the nature of the message.
+
+crypto_secretstream_xchacha20poly1305_TAG_FINAL: indicates that the message marks the end of the stream, and erases the secret key used to encrypt the previous sequence.
+
+crypto_secretstream_xchacha20poly1305_TAG_PUSH: indicates that the message marks the end of a set of messages, but not the end of the stream. For example, a huge JSON string sent as multiple chunks can use this tag to indicate to the application that the string is complete and that it can be decoded. But the stream itself is not closed, and more data may follow.
+
+crypto_secretstream_xchacha20poly1305_TAG_REKEY: “forget” the key used to encrypt this message and the previous ones, and derive a new secret key.
+
+A typical encrypted stream simply attaches 0 as a tag to all messages, except the last one which is tagged as TAG_FINAL.
+
+Note that tags are encrypted; encrypted streams do not reveal any information about sequence boundaries (PUSH and REKEY tags).
+
+For each message, additional data can be included in the computation of the authentication tag. With this API, additional data is rarely required, and most applications can just use NULL and a length of 0 instead.
+
+Encryption
+
+Copy
+void crypto_secretstream_xchacha20poly1305_keygen
+   (unsigned char k[crypto_secretstream_xchacha20poly1305_KEYBYTES]);
+Creates a random, secret key to encrypt a stream, and stores it into k.
+
+Note that using this function is not required to obtain a suitable key: the secretstream API can use any secret key whose size is crypto_secretstream_xchacha20poly1305_KEYBYTES bytes.
+
+Network protocols can leverage the key exchange API in order to get a shared key that can be used to encrypt streams. Similarly, file encryption applications can use the password hashing API to get a key that can be used with the functions below.
+
+
+Copy
+int crypto_secretstream_xchacha20poly1305_init_push
+   (crypto_secretstream_xchacha20poly1305_state *state,
+    unsigned char header[crypto_secretstream_xchacha20poly1305_HEADERBYTES],
+    const unsigned char k[crypto_secretstream_xchacha20poly1305_KEYBYTES]);
+The crypto_secretstream_xchacha20poly1305_init_push() function initializes a state state using the key k and an internal, automatically generated initialization vector. It then stores the stream header into header (crypto_secretstream_xchacha20poly1305_HEADERBYTES bytes).
+
+This is the first function to call in order to create an encrypted stream. The key k will not be required any more for subsequent operations.
+
+
+Copy
+int crypto_secretstream_xchacha20poly1305_push
+   (crypto_secretstream_xchacha20poly1305_state *state,
+    unsigned char *c, unsigned long long *clen_p,
+    const unsigned char *m, unsigned long long mlen,
+    const unsigned char *ad, unsigned long long adlen, unsigned char tag);
+The crypto_secretstream_xchacha20poly1305_push() function encrypts a message m of length mlen bytes using the state state and the tag tag.
+
+Additional data ad of length adlen can be included in the computation of the authentication tag. If no additional data is required, ad can be NULL and adlen set to 0.
+
+The ciphertext is put into c.
+
+If clen_p is not NULL, the ciphertext length will be stored at that address. But with this particular construction, the ciphertext length is guaranteed to always be mlen + crypto_secretstream_xchacha20poly1305_ABYTES.
+
+The maximum length of an individual message is crypto_secretstream_xchacha20poly1305_MESSAGEBYTES_MAX bytes (~ 256 GB).
+
+Decryption
+
+Copy
+int crypto_secretstream_xchacha20poly1305_init_pull
+   (crypto_secretstream_xchacha20poly1305_state *state,
+    const unsigned char header[crypto_secretstream_xchacha20poly1305_HEADERBYTES],
+    const unsigned char k[crypto_secretstream_xchacha20poly1305_KEYBYTES]);
+The crypto_secretstream_xchacha20poly1305_init_pull() function initializes a state given a secret key k and a header header. The key k will not be required any more for subsequent operations.
+
+It returns 0 on success, or -1 if the header is invalid.
+
+
+Copy
+int crypto_secretstream_xchacha20poly1305_pull
+   (crypto_secretstream_xchacha20poly1305_state *state,
+    unsigned char *m, unsigned long long *mlen_p, unsigned char *tag_p,
+    const unsigned char *c, unsigned long long clen,
+    const unsigned char *ad, unsigned long long adlen);
+The crypto_secretstream_xchacha20poly1305_pull() function verifies that c (a sequence of clen bytes) contains a valid ciphertext and authentication tag for the given state state and optional authenticated data ad of length adlen bytes.
+
+If the ciphertext appears to be invalid, the function returns -1.
+
+If the authentication tag appears to be correct, the decrypted message is put into m.
+
+If tag_p is not NULL, the tag attached to the message is stored at that address.
+
+If mlen_p is not NULL, the message length is stored at that address. But with this particular construction, it is guaranteed to always be clen - crypto_secretstream_xchacha20poly1305_ABYTES bytes.
+
+Applications will typically call this function in a loop, until a message with the crypto_secretstream_xchacha20poly1305_TAG_FINAL tag is found.
+
+Rekeying
+Rekeying happens automatically and transparently, before the internal counter of the underlying cipher wraps. Therefore, streams can be arbitrary large.
+
+Optionally, applications for which forward secrecy is critical can attach the crypto_secretstream_xchacha20poly1305_TAG_REKEY tag to a message in order to trigger an explicit rekeying. The decryption API will automatically update the key if this tag is found attached to a message.
+
+Explicit rekeying can also be performed without adding a tag, by calling the crypto_secretstream_xchacha20poly1305_rekey() function:
+
+
+Copy
+void crypto_secretstream_xchacha20poly1305_rekey
+    (crypto_secretstream_xchacha20poly1305_state *state);
+This updates the state, but doesn’t add any information about the key change to the stream. If this function is used to create an encrypted stream, the decryption process must call that function at the exact same stream location.
+
+Constants
+crypto_secretstream_xchacha20poly1305_ABYTES
+
+crypto_secretstream_xchacha20poly1305_HEADERBYTES
+
+crypto_secretstream_xchacha20poly1305_KEYBYTES
+
+crypto_secretstream_xchacha20poly1305_MESSAGEBYTES_MAX
+
+crypto_secretstream_xchacha20poly1305_TAG_MESSAGE
+
+crypto_secretstream_xchacha20poly1305_TAG_PUSH
+
+crypto_secretstream_xchacha20poly1305_TAG_REKEY
+
+crypto_secretstream_xchacha20poly1305_TAG_FINAL
+
+Algorithm
+Initialization (secretstream_init): a subkey k and a 64-bit nonce n are derived from a key K and a 192-bit random nonce N, using the same algorithm as XChaCha20. i is a 32-bit counter.
+
+
+Copy
+k <- HChaCha20(K, N[0..16])
+n <- N[16..24]
+i <- 1
+secretstream_init_push() outputs N.
+
+Encryption:
+
+For every message M with a tag T:
+
+
+Copy
+c, mac <- ChaCha20Poly1305-IETF(key = k, nonce = i || n, msg = T || {0} * 63 || M)
+n <- n ^ mac[0..8]
+i <- (i + 1) & 0xffffffff
+if i = 0:
+  rekey()
+secretstream_push() outputs c with the first block truncated to the tag size: c[0] || c[64..] || mac
+
+Encrypting a unique message using secretstream is equivalent to ChaCha20Poly1305-IETF(key = k, nonce = 1 || n, T || {0} * 63 || M).
+
+Rekeying:
+
+
+Copy
+k || n <- ChaCha20-IETF(key = k, nonce = i || n, msg = k || n)
+i <- 1
+A FINAL tag performs an implicit rekeying.
+
+File encryption example code
+
+Copy
+#include <stdio.h>
+#include <sodium.h>
+
+#define CHUNK_SIZE 4096
+
+static int
+encrypt(const char *target_file, const char *source_file,
+        const unsigned char key[crypto_secretstream_xchacha20poly1305_KEYBYTES])
+{
+    unsigned char  buf_in[CHUNK_SIZE];
+    unsigned char  buf_out[CHUNK_SIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
+    unsigned char  header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+    crypto_secretstream_xchacha20poly1305_state st;
+    FILE          *fp_t, *fp_s;
+    unsigned long long out_len;
+    size_t         rlen;
+    int            eof;
+    unsigned char  tag;
+
+    fp_s = fopen(source_file, "rb");
+    fp_t = fopen(target_file, "wb");
+    crypto_secretstream_xchacha20poly1305_init_push(&st, header, key);
+    fwrite(header, 1, sizeof header, fp_t);
+    do {
+        rlen = fread(buf_in, 1, sizeof buf_in, fp_s);
+        eof = feof(fp_s);
+        tag = eof ? crypto_secretstream_xchacha20poly1305_TAG_FINAL : 0;
+        crypto_secretstream_xchacha20poly1305_push(&st, buf_out, &out_len, buf_in, rlen,
+                                                   NULL, 0, tag);
+        fwrite(buf_out, 1, (size_t) out_len, fp_t);
+    } while (! eof);
+    fclose(fp_t);
+    fclose(fp_s);
+    return 0;
+}
+
+static int
+decrypt(const char *target_file, const char *source_file,
+        const unsigned char key[crypto_secretstream_xchacha20poly1305_KEYBYTES])
+{
+    unsigned char  buf_in[CHUNK_SIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
+    unsigned char  buf_out[CHUNK_SIZE];
+    unsigned char  header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
+    crypto_secretstream_xchacha20poly1305_state st;
+    FILE          *fp_t, *fp_s;
+    unsigned long long out_len;
+    size_t         rlen;
+    int            eof;
+    int            ret = -1;
+    unsigned char  tag;
+
+    fp_s = fopen(source_file, "rb");
+    fp_t = fopen(target_file, "wb");
+    fread(header, 1, sizeof header, fp_s);
+    if (crypto_secretstream_xchacha20poly1305_init_pull(&st, header, key) != 0) {
+        goto ret; /* incomplete header */
+    }
+    do {
+        rlen = fread(buf_in, 1, sizeof buf_in, fp_s);
+        eof = feof(fp_s);
+        if (crypto_secretstream_xchacha20poly1305_pull(&st, buf_out, &out_len, &tag,
+                                                       buf_in, rlen, NULL, 0) != 0) {
+            goto ret; /* corrupted chunk */
+        }
+        if (tag == crypto_secretstream_xchacha20poly1305_TAG_FINAL) {
+            if (! eof) {
+                goto ret; /* end of stream reached before the end of the file */
+            }
+        } else { /* not the final chunk yet */
+            if (eof) {
+                goto ret; /* end of file reached before the end of the stream */
+            }
+        }
+        fwrite(buf_out, 1, (size_t) out_len, fp_t);
+    } while (! eof);
+
+    ret = 0;
+ret:
+    fclose(fp_t);
+    fclose(fp_s);
+    return ret;
+}
+
+int
+main(void)
+{
+    unsigned char key[crypto_secretstream_xchacha20poly1305_KEYBYTES];
+
+    if (sodium_init() != 0) {
+        return 1;
+    }
+    crypto_secretstream_xchacha20poly1305_keygen(key);
+    if (encrypt("/tmp/encrypted", "/tmp/original", key) != 0) {
+        return 1;
+    }
+    if (decrypt("/tmp/decrypted", "/tmp/encrypted", key) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Authentication
+Example
+
+Copy
+#define MESSAGE (const unsigned char *) "test"
+#define MESSAGE_LEN 4
+
+unsigned char key[crypto_auth_KEYBYTES];
+unsigned char mac[crypto_auth_BYTES];
+
+crypto_auth_keygen(key);
+crypto_auth(mac, MESSAGE, MESSAGE_LEN, key);
+
+if (crypto_auth_verify(mac, MESSAGE, MESSAGE_LEN, key) != 0) {
+    /* message forged! */
+}
+Purpose
+This operation computes an authentication tag for a message and a secret key, and provides a way to verify that a given tag is valid for a given message and a key.
+
+The function computing the tag is deterministic: the same (message, key) tuple will always produce the same output.
+
+However, even if the message is public, knowing the key is required in order to be able to compute a valid tag. Therefore, the key should remain confidential. The tag, however, can be public.
+
+A typical use case is:
+
+A prepares a message, adds an authentication tag, and sends it to B
+
+A doesn’t store the message
+
+Later on, B sends the message and the authentication tag to A
+
+A uses the authentication tag to verify that it created this message.
+
+This operation does not encrypt the message. It only computes and verifies an authentication tag.
+
+Usage
+
+Copy
+int crypto_auth(unsigned char *out, const unsigned char *in,
+                unsigned long long inlen, const unsigned char *k);
+The crypto_auth() function computes a tag for the message in, whose length is inlen bytes, and the key k. k should be crypto_auth_KEYBYTES bytes. The function puts the tag into out. The tag is crypto_auth_BYTES bytes long.
+
+
+Copy
+int crypto_auth_verify(const unsigned char *h, const unsigned char *in,
+                       unsigned long long inlen, const unsigned char *k);
+The crypto_auth_verify() function verifies that the tag stored at h is a valid tag for the message in whose length is inlen bytes, and the key k.
+
+It returns -1 if the verification fails, and 0 if it passes.
+
+
+Copy
+void crypto_auth_keygen(unsigned char k[crypto_auth_KEYBYTES]);
+This helper function introduced in libsodium 1.0.12 creates a random key k.
+
+It is equivalent to calling randombytes_buf() but improves code clarity and can prevent misuse by ensuring that the provided key length is always be correct.
+
+Constants
+crypto_auth_BYTES
+
+crypto_auth_KEYBYTES
+
+Algorithm details
+HMAC-SHA512-256
+
+
+
+
+
+
+
+
+
+Generating random data
+The library provides a set of functions to generate unpredictable data, suitable for creating secret keys.
+
+On Windows systems, the RtlGenRandom() function is used.
+
+On OpenBSD, the arc4random() function is used.
+
+On recent FreeBSD and Linux kernels, the getrandom system call is used.
+
+On other Unices, the /dev/urandom device is used.
+
+If none of these options can safely be used, custom implementations can easily be hooked.
+
+Usage
+
+Copy
+uint32_t randombytes_random(void);
+The randombytes_random() function returns an unpredictable value between 0 and 0xffffffff (included).
+
+
+Copy
+uint32_t randombytes_uniform(const uint32_t upper_bound);
+The randombytes_uniform() function returns an unpredictable value between 0 and upper_bound (excluded). Unlike randombytes_random() % upper_bound, it guarantees a uniform distribution of the possible output values even when upper_bound is not a power of 2. Note that an upper_bound < 2 leaves only a single element to be chosen, namely 0.
+
+
+Copy
+void randombytes_buf(void * const buf, const size_t size);
+The randombytes_buf() function fills size bytes starting at buf with an unpredictable sequence of bytes.
+
+
+Copy
+void randombytes_buf_deterministic(void * const buf, const size_t size,
+                                   const unsigned char seed[randombytes_SEEDBYTES]);
+The randombytes_buf_deterministic function stores size bytes into buf indistinguishable from random bytes without knowing seed.
+
+For a given seed, this function will always output the same sequence. size can be up to 2^38 (256 GB).
+
+seed is randombytes_SEEDBYTES bytes long.
+
+This function is mainly useful for writing tests and was introduced in libsodium 1.0.12. Under the hood, it uses the ChaCha20 stream cipher.
+
+Up to 256 GB can be produced with a single seed.
+
+
+Copy
+int randombytes_close(void);
+This deallocates the global resources used by the pseudo-random number generator. More specifically, when the /dev/urandom device is used, it closes the descriptor. Explicitly calling this function is almost never required.
+
+
+Copy
+void randombytes_stir(void);
+The randombytes_stir() function reseeds the pseudo-random number generator if it supports this operation. Calling this function is not required with the default generator, even after a fork() call, unless the descriptor for /dev/urandom was closed using randombytes_close().
+
+If a non-default implementation is being used (see randombytes_set_implementation()), randombytes_stir() must be called by the child after a fork() call.
+
+Note
+If this is used in an application inside a VM, and the VM is snapshotted and restored, then the above functions may produce the same output.
