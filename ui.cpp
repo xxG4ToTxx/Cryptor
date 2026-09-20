@@ -9,6 +9,7 @@
 #include "ui.h"
 #include "VaultManager.h"
 #include "Encryption.h"
+#include "settings.h"
 
 
 
@@ -84,10 +85,9 @@ std::cout << "-_-_-_-CRYPTOR-_-_-_-\n 1: New Password\n 2: Open vault\n 3: Setti
         CreatePasswordMenu();
         break;
         case 2:
-
         break;
         case 3:
-
+        OpenSettings();
         break;
         case 4:
 
