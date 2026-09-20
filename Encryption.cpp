@@ -1,62 +1,348 @@
-#include <string>
-#include <iostream>
-#include <chrono>
-#include <thread>
-#include <cstring>
-#include <vector>
-#include <iomanip>
 #include <sodium.h>
 
+#include <array>
+#include <cstring>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "settings.h"
 #include "ui.h"
 
-void InvokePasswordPrompt() {
-    if (sodium_init() < 0) { 
-        std::cerr << "Could not initialize libsodium!\n"; 
+namespace {
+
+using Key = std::array<
+    unsigned char,
+    crypto_aead_xchacha20poly1305_ietf_KEYBYTES
+>;
+
+using Nonce = std::array<
+    unsigned char,
+    crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
+>;
+
+using Salt = std::array<
+    unsigned char,
+    crypto_pwhash_SALTBYTES
+>;
+
+class SecureBuffer {
+public:
+    explicit SecureBuffer(std::size_t size)
+        : size_(size),
+          data_(static_cast<unsigned char*>(sodium_malloc(size)))
+    {
+        if (data_ == nullptr) {
+            throw std::bad_alloc();
+        }
+
+        sodium_memzero(data_, size_);
+
+        if (sodium_mlock(data_, size_) != 0) {
+            sodium_memzero(data_, size_);
+            sodium_free(data_);
+            data_ = nullptr;
+
+            throw std::runtime_error(
+                "Failed to lock secure memory"
+            );
+        }
+    }
+
+    ~SecureBuffer()
+    {
+        if (data_ != nullptr) {
+            sodium_memzero(data_, size_);
+            sodium_munlock(data_, size_);
+            sodium_free(data_);
+        }
+    }
+
+    SecureBuffer(const SecureBuffer&) = delete;
+    SecureBuffer& operator=(const SecureBuffer&) = delete;
+
+    SecureBuffer(SecureBuffer&& other) noexcept
+        : size_(other.size_),
+          data_(other.data_)
+    {
+        other.size_ = 0;
+        other.data_ = nullptr;
+    }
+
+    SecureBuffer& operator=(SecureBuffer&& other) noexcept
+    {
+        if (this == &other) {
+            return *this;
+        }
+
+        if (data_ != nullptr) {
+            sodium_memzero(data_, size_);
+            sodium_munlock(data_, size_);
+            sodium_free(data_);
+        }
+
+        size_ = other.size_;
+        data_ = other.data_;
+
+        other.size_ = 0;
+        other.data_ = nullptr;
+
+        return *this;
+    }
+
+    unsigned char* data()
+    {
+        return data_;
+    }
+
+    const unsigned char* data() const
+    {
+        return data_;
+    }
+
+    std::size_t size() const
+    {
+        return size_;
+    }
+
+private:
+    std::size_t size_;
+    unsigned char* data_;
+};
+
+
+struct EncryptedData {
+    Salt salt{};
+    Nonce nonce{};
+    std::vector<unsigned char> ciphertext;
+};
+
+
+std::string HexEncode(
+    const unsigned char* data,
+    std::size_t size
+)
+{
+    if (size == 0) {
+        return {};
+    }
+
+    std::string result(size * 2 + 1, '\0');
+
+    sodium_bin2hex(
+        result.data(),
+        result.size(),
+        data,
+        size
+    );
+
+    result.resize(size * 2);
+
+    return result;
+}
+
+
+EncryptedData Encrypt(
+    const unsigned char* plaintext,
+    std::size_t plaintextLength,
+    const unsigned char* password,
+    std::size_t passwordLength,
+    const SecuritySettings& settings
+)
+{
+    if (sodium_init() < 0) {
+        throw std::runtime_error(
+            "libsodium initialization failed"
+        );
+    }
+
+    if (!settings.KDF_Argon2id) {
+        throw std::runtime_error(
+            "Argon2id is disabled in SecuritySettings"
+        );
+    }
+
+    if (settings.KDF_AES_KDF) {
+        throw std::runtime_error(
+            "AES-KDF is enabled but is not implemented"
+        );
+    }
+
+    if (!settings.KDF_Secretbox) {
+        throw std::runtime_error(
+            "Secretbox encryption is disabled"
+        );
+    }
+
+    EncryptedData result;
+
+    randombytes_buf(
+        result.salt.data(),
+        result.salt.size()
+    );
+
+    randombytes_buf(
+        result.nonce.data(),
+        result.nonce.size()
+    );
+
+    SecureBuffer key(
+        crypto_aead_xchacha20poly1305_ietf_KEYBYTES
+    );
+
+    if (crypto_pwhash(
+            key.data(),
+            key.size(),
+            reinterpret_cast<const char*>(password),
+            passwordLength,
+            result.salt.data(),
+            crypto_pwhash_OPSLIMIT_MODERATE,
+            crypto_pwhash_MEMLIMIT_MODERATE,
+            crypto_pwhash_ALG_ARGON2ID13
+        ) != 0)
+    {
+        throw std::runtime_error(
+            "Argon2id key derivation failed"
+        );
+    }
+
+    result.ciphertext.resize(
+        plaintextLength +
+        crypto_aead_xchacha20poly1305_ietf_ABYTES
+    );
+
+    unsigned long long ciphertextLength = 0;
+
+    if (crypto_aead_xchacha20poly1305_ietf_encrypt(
+            result.ciphertext.data(),
+            &ciphertextLength,
+            plaintext,
+            plaintextLength,
+            nullptr,
+            0,
+            nullptr,
+            result.nonce.data(),
+            key.data()
+        ) != 0)
+    {
+        sodium_memzero(
+            result.ciphertext.data(),
+            result.ciphertext.size()
+        );
+
+        result.ciphertext.clear();
+
+        throw std::runtime_error(
+            "XChaCha20-Poly1305 encryption failed"
+        );
+    }
+
+    result.ciphertext.resize(
+        static_cast<std::size_t>(ciphertextLength)
+    );
+
+    return result;
+}
+
+}
+
+
+void InvokePasswordPrompt()
+{
+    if (sodium_init() < 0) {
+        std::cerr
+            << "Could not initialize libsodium!\n";
+
         return;
     }
 
-    char password[256];
-    std::cout << "Enter password: ";
-    std::cin.getline(password, sizeof(password));
+    SecuritySettings securitySettings;
+    Ghost_Features ghostFeatures;
 
-    unsigned char salt[crypto_pwhash_SALTBYTES];
-    randombytes_buf(salt, sizeof(salt));
+    SecureBuffer password(256);
 
-    unsigned char key[crypto_secretbox_KEYBYTES];
+    std::cout
+        << "Enter password: ";
 
-    if (crypto_pwhash(key, sizeof(key), password, strlen(password), salt,
-                      crypto_pwhash_OPSLIMIT_INTERACTIVE, crypto_pwhash_MEMLIMIT_INTERACTIVE,
-                      crypto_pwhash_ALG_DEFAULT) != 0) {
-        std::cerr << "Key derivation failed!\n";
+    std::cin >> std::ws;
+
+    std::cin.getline(
+        reinterpret_cast<char*>(password.data()),
+        static_cast<std::streamsize>(password.size())
+    );
+
+    if (std::cin.fail()) {
+        std::cin.clear();
+
+        std::cerr
+            << "Password is too long.\n";
+
         return;
     }
 
-    unsigned char nonce[crypto_secretbox_NONCEBYTES];
-    randombytes_buf(nonce, sizeof(nonce));
+    const std::size_t passwordLength =
+        strnlen(
+            reinterpret_cast<const char*>(
+                password.data()
+            ),
+            password.size()
+        );
 
-    size_t encrypted_len = strlen(password) + crypto_secretbox_MACBYTES;
-    std::vector<unsigned char> encrypted_password(encrypted_len);
+    if (passwordLength == 0) {
+        std::cerr
+            << "Password cannot be empty.\n";
 
-    crypto_secretbox_easy(encrypted_password.data(), (const unsigned char*)password, strlen(password), nonce, key);
-
-    std::cout << "\nEncrypted Password (Hex): ";
-    for (size_t i = 0; i < encrypted_len; i++) {
-        std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)encrypted_password[i];
+        return;
     }
 
-    std::cout << "\nSalt (Hex): ";
-    for (size_t i = 0; i < sizeof(salt); i++) {
-        std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)salt[i];
-    }
+    try {
 
-    std::cout << "\nDerived Key (Hex): ";
-    for (size_t i = 0; i < sizeof(key); i++) {
-        std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)key[i];
-    }
-    std::cout << std::dec << "\n";
+        EncryptedData encrypted = Encrypt(
+            password.data(),
+            passwordLength,
+            password.data(),
+            passwordLength,
+            securitySettings
+        );
 
-    sodium_memzero(password, sizeof(password));
-    sodium_memzero(salt, sizeof(salt));
-    sodium_memzero(key, sizeof(key));
-    sodium_memzero(nonce, sizeof(nonce));
+        std::cout
+            << "Salt: "
+            << HexEncode(
+                encrypted.salt.data(),
+                encrypted.salt.size()
+            )
+            << '\n';
+
+        std::cout
+            << "Nonce: "
+            << HexEncode(
+                encrypted.nonce.data(),
+                encrypted.nonce.size()
+            )
+            << '\n';
+
+        std::cout
+            << "Encrypted: "
+            << HexEncode(
+                encrypted.ciphertext.data(),
+                encrypted.ciphertext.size()
+            )
+            << '\n';
+
+        if (ghostFeatures.TCATO) {
+            sodium_memzero(
+                encrypted.ciphertext.data(),
+                encrypted.ciphertext.size()
+            );
+        }
+
+    }
+    catch (const std::exception& e) {
+
+        std::cerr
+            << "Encryption error: "
+            << e.what()
+            << '\n';
+    }
 }
