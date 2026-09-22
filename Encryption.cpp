@@ -9,6 +9,7 @@
 
 #include "settings.h"
 #include "ui.h"
+#include "Encryption.h"
 
 namespace {
 
@@ -27,6 +28,7 @@ using Salt = std::array<
     crypto_pwhash_SALTBYTES
 >;
 
+
 class SecureBuffer {
 public:
     explicit SecureBuffer(std::size_t size)
@@ -37,12 +39,21 @@ public:
             throw std::bad_alloc();
         }
 
-        sodium_memzero(data_, size_);
+        sodium_memzero(
+            data_,
+            size_
+        );
 
         if (sodium_mlock(data_, size_) != 0) {
-            sodium_memzero(data_, size_);
+            sodium_memzero(
+                data_,
+                size_
+            );
+
             sodium_free(data_);
+
             data_ = nullptr;
+            size_ = 0;
 
             throw std::runtime_error(
                 "Failed to lock secure memory"
@@ -52,11 +63,7 @@ public:
 
     ~SecureBuffer()
     {
-        if (data_ != nullptr) {
-            sodium_memzero(data_, size_);
-            sodium_munlock(data_, size_);
-            sodium_free(data_);
-        }
+        Release();
     }
 
     SecureBuffer(const SecureBuffer&) = delete;
@@ -76,11 +83,7 @@ public:
             return *this;
         }
 
-        if (data_ != nullptr) {
-            sodium_memzero(data_, size_);
-            sodium_munlock(data_, size_);
-            sodium_free(data_);
-        }
+        Release();
 
         size_ = other.size_;
         data_ = other.data_;
@@ -106,16 +109,76 @@ public:
         return size_;
     }
 
+    void Clear() noexcept
+    {
+        if (data_ != nullptr) {
+            sodium_memzero(
+                data_,
+                size_
+            );
+        }
+    }
+
+private:
+    void Release() noexcept
+    {
+        if (data_ == nullptr) {
+            return;
+        }
+
+        sodium_memzero(
+            data_,
+            size_
+        );
+
+        sodium_munlock(
+            data_,
+            size_
+        );
+
+        sodium_free(
+            data_
+        );
+
+        data_ = nullptr;
+        size_ = 0;
+    }
+
 private:
     std::size_t size_;
     unsigned char* data_;
 };
 
 
-struct EncryptedData {
-    Salt salt{};
-    Nonce nonce{};
-    std::vector<unsigned char> ciphertext;
+class TerminalCleanup {
+public:
+    explicit TerminalCleanup(bool enabled)
+        : enabled_(enabled)
+    {
+    }
+
+    ~TerminalCleanup()
+    {
+        if (enabled_) {
+            Clear();
+        }
+    }
+
+    TerminalCleanup(const TerminalCleanup&) = delete;
+    TerminalCleanup& operator=(const TerminalCleanup&) = delete;
+
+    static void Clear() noexcept
+    {
+        std::cout
+            << "\x1b[2J"
+            << "\x1b[3J"
+            << "\x1b[H";
+
+        std::cout.flush();
+    }
+
+private:
+    bool enabled_;
 };
 
 
@@ -124,11 +187,14 @@ std::string HexEncode(
     std::size_t size
 )
 {
-    if (size == 0) {
+    if (data == nullptr || size == 0) {
         return {};
     }
 
-    std::string result(size * 2 + 1, '\0');
+    std::string result(
+        size * 2 + 1,
+        '\0'
+    );
 
     sodium_bin2hex(
         result.data(),
@@ -137,9 +203,13 @@ std::string HexEncode(
         size
     );
 
-    result.resize(size * 2);
+    result.resize(
+        size * 2
+    );
 
     return result;
+}
+
 }
 
 
@@ -154,6 +224,18 @@ EncryptedData Encrypt(
     if (sodium_init() < 0) {
         throw std::runtime_error(
             "libsodium initialization failed"
+        );
+    }
+
+    if (plaintext == nullptr && plaintextLength != 0) {
+        throw std::invalid_argument(
+            "Plaintext pointer is null"
+        );
+    }
+
+    if (password == nullptr || passwordLength == 0) {
+        throw std::invalid_argument(
+            "Password cannot be empty"
         );
     }
 
@@ -226,12 +308,14 @@ EncryptedData Encrypt(
             key.data()
         ) != 0)
     {
-        sodium_memzero(
-            result.ciphertext.data(),
-            result.ciphertext.size()
-        );
+        if (!result.ciphertext.empty()) {
+            sodium_memzero(
+                result.ciphertext.data(),
+                result.ciphertext.size()
+            );
 
-        result.ciphertext.clear();
+            result.ciphertext.clear();
+        }
 
         throw std::runtime_error(
             "XChaCha20-Poly1305 encryption failed"
@@ -239,12 +323,14 @@ EncryptedData Encrypt(
     }
 
     result.ciphertext.resize(
-        static_cast<std::size_t>(ciphertextLength)
+        static_cast<std::size_t>(
+            ciphertextLength
+        )
     );
 
-    return result;
-}
+    key.Clear();
 
+    return result;
 }
 
 
@@ -260,6 +346,10 @@ void InvokePasswordPrompt()
     SecuritySettings securitySettings;
     Ghost_Features ghostFeatures;
 
+    TerminalCleanup terminalCleanup(
+        ghostFeatures.clear_terminal_persitant_logs_on_exit
+    );
+
     SecureBuffer password(256);
 
     std::cout
@@ -269,7 +359,9 @@ void InvokePasswordPrompt()
 
     std::cin.getline(
         reinterpret_cast<char*>(password.data()),
-        static_cast<std::streamsize>(password.size())
+        static_cast<std::streamsize>(
+            password.size()
+        )
     );
 
     if (std::cin.fail()) {
@@ -306,35 +398,8 @@ void InvokePasswordPrompt()
             securitySettings
         );
 
-        std::cout
-            << "Salt: "
-            << HexEncode(
-                encrypted.salt.data(),
-                encrypted.salt.size()
-            )
-            << '\n';
-
-        std::cout
-            << "Nonce: "
-            << HexEncode(
-                encrypted.nonce.data(),
-                encrypted.nonce.size()
-            )
-            << '\n';
-
-        std::cout
-            << "Encrypted: "
-            << HexEncode(
-                encrypted.ciphertext.data(),
-                encrypted.ciphertext.size()
-            )
-            << '\n';
-
         if (ghostFeatures.TCATO) {
-            sodium_memzero(
-                encrypted.ciphertext.data(),
-                encrypted.ciphertext.size()
-            );
+            return;
         }
 
     }
