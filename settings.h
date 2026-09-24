@@ -1,14 +1,10 @@
 #pragma once
 
-
-
-
-int OpenSettings();
+#include <string>
 
 struct SecuritySettings {
     bool KDF_Argon2id = true;
     bool KDF_AES_KDF = false;
-    bool KDF_Secretbox = true;
 
     int auto_lock_time_SECONDS = 5;
 
@@ -24,4 +20,8 @@ struct Ghost_Features {
     bool TCATO = true;
 };
 
-int OpenSettings();
+const SecuritySettings& GetSecuritySettings();
+const Ghost_Features& GetGhostFeatures();
+SecuritySettings& EditSecuritySettings();
+Ghost_Features& EditGhostFeatures();
+std::string GetSettingsSection(int option);

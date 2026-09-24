@@ -1,63 +1,21 @@
-
-//startup.cpp
-
-#include <vector>
-#include <string>
 #include <iostream>
+#include <string>
 #include <sodium.h>
 
+#include "Platform.h"
 #include "VaultManager.h"
 
+std::string StartUp()
+{
+    if (InitializeVaultDirectory() != "PASSED CHECKS") {
+        Platform::ClearScreen();
+        return "Failed to initialize";
+    }
 
+    if (sodium_init() < 0) {
+        std::cerr << "Libsodium failed to initialize.\n";
+        return "Failed to initialize";
+    }
 
-
-
-extern "C" {
-    #include <sodium.h>
+    return "SUCCESS";
 }
-
-
-std::string StartUp(){
-std::string VaultDirectoryStatus = InitializeVaultDirectory();
-
-
-//std::string VaultStatus = LookForVaults();
-//paused for developing
-
-std::cout << VaultDirectoryStatus;
-if(VaultDirectoryStatus == "PASSED CHECKS"){
-       if (sodium_init() < 0) {
-            system("cls");
-        std::cerr << "Libsodium failed to initialize, try running the file again or check for updates...\n";
-        //initialize libsodium
-         }
-         else{
-
-
-
-
-
-
-return "SUCCESS";
-
-
-         };
-         
-
-}
-else if(VaultDirectoryStatus == "ERROR"){
-system("cls");
-return "Failed to initialize";
-
-
-}
-return "UNEXPECTED";
-
-
-};
-
-
-
-
-
-

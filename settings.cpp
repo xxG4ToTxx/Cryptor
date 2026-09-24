@@ -1,58 +1,73 @@
-#include <iostream>
+#include <sstream>
+
+#include "settings.h"
+
+namespace {
+
+SecuritySettings securitySettings;
+Ghost_Features ghostFeatures;
+
+}
 
 
-struct SecuritySettings{
-    bool KDF_Argon2id = true;
-    bool KDF_AES_KDF = false;
-    bool KDF_Secretbox = true;
+const SecuritySettings& GetSecuritySettings()
+{
+    return securitySettings;
+}
 
 
-    int auto_lock_time_SECONDS = 5;
+const Ghost_Features& GetGhostFeatures()
+{
+    return ghostFeatures;
+}
 
 
-    bool Lock_On_System_Sleep = true;
-    bool Lock_On_Window_minimize = true;
-    bool Lock_On_Wifi_Connection = false;
-    bool Lock_On_Suspicious_Bhevaior = false;
-
-};
-
-struct Ghost_Features{
-
-    int Clear_Clipboard_timer_SECONDS = 40;
-    bool clear_terminal_persitant_logs_on_exit = true;
-    bool TCATO = true;
-
-};
+SecuritySettings& EditSecuritySettings()
+{
+    return securitySettings;
+}
 
 
+Ghost_Features& EditGhostFeatures()
+{
+    return ghostFeatures;
+}
 
-int OpenSettings(){
 
-    int option;
-    std::cout << "1: Security settings\n2: Ghost features\n3: cloud/backups\n4: other settings\n  > ";
-    std::cin >> option;
-    switch(option){
-        case 1:
-            system("cls");
-            
+std::string GetSettingsSection(int option)
+{
+    std::ostringstream output;
 
-            
-            break;
-        case 2:
-            std::cout << "\n";
-            break;
-        case 3:
-            std::cout << "\n";
-            break;
-        case 4:
-            std::cout << "\n";
+    switch (option) {
+    case 1:
+        output << "Argon2id: "
+               << (securitySettings.KDF_Argon2id ? "enabled" : "disabled")
+               << "\n"
+               << "XChaCha20-Poly1305: enabled\n"
+               << "Auto-lock: "
+               << securitySettings.auto_lock_time_SECONDS
+               << " seconds\n";
+        break;
+    case 2:
+        output << "Clear clipboard timer: "
+               << ghostFeatures.Clear_Clipboard_timer_SECONDS
+               << " seconds\n"
+               << "Clear terminal history on exit: "
+               << (ghostFeatures.clear_terminal_persitant_logs_on_exit
+                       ? "enabled"
+                       : "disabled")
+               << "\n";
+        break;
+    case 3:
+        output << "Cloud and backups are not configured.\n";
+        break;
+    case 4:
+        output << "No other settings are configured.\n";
+        break;
+    default:
+        output << "Invalid selection.\n";
+        break;
     }
-    
 
-
-
-
-
-return 0;
-};
+    return output.str();
+}

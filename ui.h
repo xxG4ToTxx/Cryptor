@@ -7,13 +7,11 @@
 
 std::string CreatePasswordMenu();
 
-inline bool IsVaultOpen = true;
-// SET TO FALSE WHeN PUBLIC!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1
+extern bool IsVaultOpen;
 
 std::string MainMenu();
-
-
-void ShowFooter();
+int OpenSettings();
+void LockSession();
 
 
 void ShowFooter();

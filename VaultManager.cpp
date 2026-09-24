@@ -1,132 +1,119 @@
-#include <filesystem>
-#include <iostream>
-#include <string>
-#include <vector>
 #include <algorithm>
-#include <fstream>
-#include <cstdint>
 #include <chrono>
-#include <ctime>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
+#include <string>
 
 #include "Encryption.h"
+#include "Platform.h"
+#include "VaultManager.h"
 
 namespace fs = std::filesystem;
 
 bool DirectoryExists = false;
 bool isFolder = false;
 
+struct Vault {
+    std::string name;
+    int ID = 0;
+    std::string creation_date;
+    fs::path Path;
+};
+
 namespace {
 
-constexpr const char* VaultRoot =
-    "C:/Documents/cryptor";
+constexpr const char* VaultMetadataFile = "vault.meta";
+constexpr const char* VaultDataFile = "vault.cryptor";
+constexpr const char* PasswordFile = "password.cryptor";
+constexpr const char* DecoyPasswordFile = "decoy.cryptor";
+constexpr const char* PasswordTempFile = "password.cryptor.tmp";
+constexpr std::uint8_t CurrentVersion = 1;
+constexpr std::uint64_t MaximumCiphertextSize = 64 * 1024 * 1024;
 
-constexpr const char* VaultMetadataFile =
-    "vault.meta";
 
-constexpr const char* VaultDataFile =
-    "vault.cryptor";
-
-
-bool ReadVaultMetadata(
-    const fs::path& path,
-    struct Vault& vault
-);
-
-bool IsValidVault(
-    const fs::path& path
-)
+fs::path VaultRoot()
 {
-    if (!fs::exists(path)) {
+    return Platform::VaultDirectory();
+}
+
+
+bool IsSafeVaultName(const std::string& name)
+{
+    if (name.empty() || name == "." || name == "..") {
         return false;
     }
 
-    if (!fs::is_directory(path)) {
-        return false;
-    }
-
-    if (!fs::exists(
-            path / VaultMetadataFile
-        ))
-    {
-        return false;
-    }
-
-    if (!fs::exists(
-            path / VaultDataFile
-        ))
-    {
-        return false;
-    }
-
-    return true;
+    const fs::path path(name);
+    return path.filename() == path &&
+           name.find_first_of("/\\") == std::string::npos;
 }
 
 
 std::string GetCurrentDate()
 {
-    const auto now =
-        std::chrono::system_clock::now();
-
-    const std::time_t time =
-        std::chrono::system_clock::to_time_t(now);
-
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
     std::tm localTime{};
 
 #ifdef _WIN32
-    localtime_s(
-        &localTime,
-        &time
-    );
+    localtime_s(&localTime, &time);
 #else
-    localtime_r(
-        &time,
-        &localTime
-    );
+    localtime_r(&time, &localTime);
 #endif
 
     std::ostringstream result;
-
-    result
-        << std::put_time(
-            &localTime,
-            "%Y-%m-%d %H:%M:%S"
-        );
-
+    result << std::put_time(&localTime, "%Y-%m-%d %H:%M:%S");
     return result.str();
 }
 
 
-bool WriteVaultMetadata(
-    const struct Vault& vault
-)
+bool ReadVaultMetadata(const fs::path& path, Vault& vault)
 {
     try {
-
-        fs::path path =
-            fs::path(vault.Path) /
-            VaultMetadataFile;
-
-        std::ofstream file(
-            path,
-            std::ios::binary |
-            std::ios::trunc
-        );
-
+        std::ifstream file(path / VaultMetadataFile);
         if (!file.is_open()) {
             return false;
         }
 
-        file
-            << "version=1\n"
-            << "id=" << vault.ID << '\n'
-            << "name=" << vault.name << '\n'
-            << "creation_date="
-            << vault.creation_date
-            << '\n';
+        bool validVersion = false;
+        bool validId = false;
+        std::string line;
 
-        return file.good();
+        while (std::getline(file, line)) {
+            const std::size_t separator = line.find('=');
+            if (separator == std::string::npos) {
+                continue;
+            }
+
+            const std::string key = line.substr(0, separator);
+            const std::string value = line.substr(separator + 1);
+
+            if (key == "version") {
+                validVersion = value == "1";
+            }
+            else if (key == "id") {
+                try {
+                    vault.ID = std::stoi(value);
+                    validId = vault.ID > 0;
+                }
+                catch (...) {
+                    return false;
+                }
+            }
+            else if (key == "name") {
+                vault.name = value;
+            }
+            else if (key == "creation_date") {
+                vault.creation_date = value;
+            }
+        }
+
+        vault.Path = path;
+        return validVersion && validId && IsSafeVaultName(vault.name);
     }
     catch (...) {
         return false;
@@ -134,67 +121,12 @@ bool WriteVaultMetadata(
 }
 
 
-bool ReadVaultMetadata(
-    const fs::path& path,
-    struct Vault& vault
-)
+bool IsValidVaultPath(const fs::path& path)
 {
     try {
-
-        std::ifstream file(
-            path / VaultMetadataFile
-        );
-
-        if (!file.is_open()) {
-            return false;
-        }
-
-        std::string line;
-
-        while (std::getline(file, line)) {
-
-            const std::size_t separator =
-                line.find('=');
-
-            if (separator == std::string::npos) {
-                continue;
-            }
-
-            const std::string key =
-                line.substr(
-                    0,
-                    separator
-                );
-
-            const std::string value =
-                line.substr(
-                    separator + 1
-                );
-
-            if (key == "id") {
-
-                try {
-                    vault.ID =
-                        std::stoi(value);
-                }
-                catch (...) {
-                    return false;
-                }
-            }
-            else if (key == "name") {
-
-                vault.name = value;
-            }
-            else if (key == "creation_date") {
-
-                vault.creation_date = value;
-            }
-        }
-
-        vault.Path =
-            path.string();
-
-        return !vault.name.empty();
+        return fs::is_directory(path) &&
+               fs::is_regular_file(path / VaultMetadataFile) &&
+               fs::is_regular_file(path / VaultDataFile);
     }
     catch (...) {
         return false;
@@ -205,81 +137,205 @@ bool ReadVaultMetadata(
 int GetNextVaultID()
 {
     int highestID = 0;
+    const fs::path root = VaultRoot();
 
-    const fs::path root =
-        VaultRoot;
-
-    if (!fs::exists(root)) {
+    if (!fs::is_directory(root)) {
         return 1;
     }
 
-    for (const auto& entry :
-         fs::directory_iterator(root))
-    {
+    for (const auto& entry : fs::directory_iterator(root)) {
         if (!entry.is_directory()) {
             continue;
         }
 
-        Vault vault{};
-
-        if (!ReadVaultMetadata(
-                entry.path(),
-                vault
-            ))
-        {
-            continue;
+        Vault vault;
+        if (ReadVaultMetadata(entry.path(), vault)) {
+            highestID = std::max(highestID, vault.ID);
         }
-
-        highestID =
-            std::max(
-                highestID,
-                vault.ID
-            );
     }
 
     return highestID + 1;
 }
 
+
+void RestrictFile(const fs::path& path)
+{
+    fs::permissions(
+        path,
+        fs::perms::owner_read | fs::perms::owner_write,
+        fs::perm_options::replace
+    );
 }
 
 
-struct Vault {
-    std::string name;
-    int ID;
-    std::string creation_date;
-    std::string Path;
-};
+bool WriteVaultMetadata(const Vault& vault)
+{
+    std::ofstream file(
+        vault.Path / VaultMetadataFile,
+        std::ios::binary | std::ios::trunc
+    );
+
+    if (!file.is_open()) {
+        return false;
+    }
+
+    file << "version=1\n"
+         << "id=" << vault.ID << '\n'
+         << "name=" << vault.name << '\n'
+         << "creation_date=" << vault.creation_date << '\n';
+
+    file.close();
+    if (!file.good()) {
+        return false;
+    }
+
+    RestrictFile(vault.Path / VaultMetadataFile);
+    return true;
+}
 
 
-std::string CreateNewVault(
-    std::string NextTask
+bool ReadEncryptedFile(const fs::path& path, EncryptedData& encrypted)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        return false;
+    }
+
+    std::uint8_t version = 0;
+    std::uint64_t ciphertextSize = 0;
+
+    file.read(
+        reinterpret_cast<char*>(&version),
+        sizeof(version)
+    );
+    file.read(
+        reinterpret_cast<char*>(encrypted.salt.data()),
+        static_cast<std::streamsize>(encrypted.salt.size())
+    );
+    file.read(
+        reinterpret_cast<char*>(encrypted.nonce.data()),
+        static_cast<std::streamsize>(encrypted.nonce.size())
+    );
+    file.read(
+        reinterpret_cast<char*>(&ciphertextSize),
+        sizeof(ciphertextSize)
+    );
+
+    if (!file.good() ||
+        version != CurrentVersion ||
+        ciphertextSize < crypto_aead_xchacha20poly1305_ietf_ABYTES ||
+        ciphertextSize > MaximumCiphertextSize)
+    {
+        return false;
+    }
+
+    encrypted.version = version;
+    encrypted.ciphertext.resize(
+        static_cast<std::size_t>(ciphertextSize)
+    );
+
+    file.read(
+        reinterpret_cast<char*>(encrypted.ciphertext.data()),
+        static_cast<std::streamsize>(encrypted.ciphertext.size())
+    );
+
+    return file.good();
+}
+
+
+bool WriteEncryptedFile(
+    const fs::path& path,
+    const EncryptedData& encrypted
 )
 {
-    std::string VaultName;
+    const fs::path temporaryPath = path.parent_path() / PasswordTempFile;
+    std::ofstream file(
+        temporaryPath,
+        std::ios::binary | std::ios::trunc
+    );
 
-    system("cls");
+    if (!file.is_open()) {
+        return false;
+    }
 
-    std::cout
-        << "enter desired name of vault\n"
-        << "  > ";
+    const std::uint64_t ciphertextSize =
+        static_cast<std::uint64_t>(encrypted.ciphertext.size());
 
-    std::cin >> VaultName;
+    file.write(
+        reinterpret_cast<const char*>(&encrypted.version),
+        sizeof(encrypted.version)
+    );
+    file.write(
+        reinterpret_cast<const char*>(encrypted.salt.data()),
+        static_cast<std::streamsize>(encrypted.salt.size())
+    );
+    file.write(
+        reinterpret_cast<const char*>(encrypted.nonce.data()),
+        static_cast<std::streamsize>(encrypted.nonce.size())
+    );
+    file.write(
+        reinterpret_cast<const char*>(&ciphertextSize),
+        sizeof(ciphertextSize)
+    );
+    file.write(
+        reinterpret_cast<const char*>(encrypted.ciphertext.data()),
+        static_cast<std::streamsize>(encrypted.ciphertext.size())
+    );
+    file.close();
 
-    if (VaultName.empty()) {
+    if (!file.good()) {
+        fs::remove(temporaryPath);
+        return false;
+    }
+
+    try {
+        fs::remove(path);
+        fs::rename(temporaryPath, path);
+        RestrictFile(path);
+        return true;
+    }
+    catch (...) {
+        fs::remove(temporaryPath);
+        return false;
+    }
+}
+
+}
+
+
+std::string InitializeVaultDirectory()
+{
+    try {
+        const fs::path root = VaultRoot();
+        if (fs::exists(root) && !fs::is_directory(root)) {
+            DirectoryExists = false;
+            isFolder = false;
+            return "ERROR";
+        }
+
+        fs::create_directories(root);
+        DirectoryExists = fs::exists(root);
+        isFolder = fs::is_directory(root);
+        return DirectoryExists && isFolder ? "PASSED CHECKS" : "ERROR";
+    }
+    catch (...) {
+        DirectoryExists = false;
+        isFolder = false;
+        return "ERROR";
+    }
+}
+
+
+std::string CreateNewVault(const std::string& vaultName)
+{
+    if (!IsSafeVaultName(vaultName)) {
         return "INVALID_NAME";
     }
 
-    fs::path targetFolder =
-        VaultRoot;
-
     try {
-
-        fs::create_directories(
-            targetFolder
-        );
-
-        fs::path fullPath =
-            targetFolder / VaultName;
+        const fs::path root = VaultRoot();
+        fs::create_directories(root);
+        const fs::path fullPath = root / vaultName;
 
         if (fs::exists(fullPath)) {
             return "VAULT_EXISTS";
@@ -290,48 +346,29 @@ std::string CreateNewVault(
         }
 
         Vault vault;
-
-        vault.name =
-            VaultName;
-
-        vault.ID =
-            GetNextVaultID();
-
-        vault.creation_date =
-            GetCurrentDate();
-
-        vault.Path =
-            fullPath.string();
+        vault.name = vaultName;
+        vault.ID = GetNextVaultID();
+        vault.creation_date = GetCurrentDate();
+        vault.Path = fullPath;
 
         if (!WriteVaultMetadata(vault)) {
             fs::remove_all(fullPath);
-
             return "METADATA_FAILED";
         }
 
         std::ofstream vaultData(
             fullPath / VaultDataFile,
-            std::ios::binary |
-            std::ios::trunc
+            std::ios::binary | std::ios::trunc
         );
-
-        if (!vaultData.is_open()) {
-            fs::remove_all(fullPath);
-
-            return "VAULT_DATA_FAILED";
-        }
-
-        vaultData
-            << "CRYPTOR_VAULT_V1";
-
+        vaultData << "CRYPTOR_VAULT_V1";
         vaultData.close();
 
         if (!vaultData.good()) {
             fs::remove_all(fullPath);
-
             return "VAULT_DATA_FAILED";
         }
 
+        RestrictFile(fullPath / VaultDataFile);
         return "SUCCESS";
     }
     catch (...) {
@@ -340,282 +377,222 @@ std::string CreateNewVault(
 }
 
 
-std::string LookForVaults()
+bool VaultExists(const std::string& vaultName)
 {
-    const fs::path targetFolder =
-        VaultRoot;
+    return IsSafeVaultName(vaultName) &&
+           IsValidVaultPath(VaultRoot() / vaultName);
+}
+
+
+bool HasStoredPassword(const std::string& vaultName)
+{
+    return VaultExists(vaultName) &&
+           fs::is_regular_file(VaultRoot() / vaultName / PasswordFile);
+}
+
+
+bool HasDecoyPassword(const std::string& vaultName)
+{
+    return VaultExists(vaultName) &&
+           fs::is_regular_file(VaultRoot() / vaultName / DecoyPasswordFile);
+}
+
+
+int ConfigureDecoyPassword(
+    const std::string& vaultName,
+    const SecureSecret& decoyPassword
+)
+{
+    if (decoyPassword.size() == 0 || !VaultExists(vaultName)) {
+        return 1;
+    }
 
     try {
+        EncryptedData encrypted = Encrypt(
+            nullptr,
+            0,
+            decoyPassword.data(),
+            decoyPassword.size(),
+            GetSecuritySettings()
+        );
 
-        if (!fs::exists(targetFolder)) {
+        return WriteEncryptedFile(
+            VaultRoot() / vaultName / DecoyPasswordFile,
+            encrypted
+        ) ? 0 : 2;
+    }
+    catch (...) {
+        return 3;
+    }
+}
+
+
+int RemoveDecoyPassword(const std::string& vaultName)
+{
+    if (!VaultExists(vaultName)) {
+        return 1;
+    }
+
+    try {
+        fs::remove(VaultRoot() / vaultName / DecoyPasswordFile);
+        return 0;
+    }
+    catch (...) {
+        return 2;
+    }
+}
+
+
+bool VerifyVault(const std::string& vaultName)
+{
+    if (!VaultExists(vaultName)) {
+        return false;
+    }
+
+    Vault vault;
+    return ReadVaultMetadata(VaultRoot() / vaultName, vault);
+}
+
+
+std::string LookForVaults()
+{
+    try {
+        const fs::path root = VaultRoot();
+        if (!fs::is_directory(root)) {
             return "NO_VAULTS";
         }
 
-        if (!fs::is_directory(targetFolder)) {
-            return "INVALID_ROOT";
-        }
-
         bool foundVault = false;
-
-        for (const auto& entry :
-             fs::directory_iterator(targetFolder))
-        {
+        for (const auto& entry : fs::directory_iterator(root)) {
             if (!entry.is_directory()) {
                 continue;
             }
 
-            Vault vault{};
-
-            if (!ReadVaultMetadata(
-                    entry.path(),
-                    vault
-                ))
-            {
-                continue;
-            }
-
-            if (!IsValidVault(
-                    entry.path()
-                ))
+            Vault vault;
+            if (!ReadVaultMetadata(entry.path(), vault) ||
+                !IsValidVaultPath(entry.path()))
             {
                 continue;
             }
 
             foundVault = true;
-
-            std::cout
-                << "\nVault: "
-                << vault.name
-                << '\n';
-
-            std::cout
-                << "ID: "
-                << vault.ID
-                << '\n';
-
-            std::cout
-                << "Created: "
-                << vault.creation_date
-                << '\n';
-
-            std::cout
-                << "Path: "
-                << vault.Path
-                << '\n';
+            std::cout << "Vault: " << vault.name << '\n'
+                      << "ID: " << vault.ID << '\n'
+                      << "Created: " << vault.creation_date << '\n'
+                      << "Path: " << vault.Path << "\n\n";
         }
 
-        if (!foundVault) {
-            return "NO_VAULTS";
-        }
-
-        return "GOOD";
+        return foundVault ? "GOOD" : "NO_VAULTS";
     }
     catch (...) {
         return "ERROR";
     }
-}
-
-
-std::string InitializeVaultDirectory()
-{
-    fs::path targetFolder =
-        VaultRoot;
-
-    try {
-
-        if (!fs::exists(
-                targetFolder
-            ))
-        {
-            fs::create_directories(
-                targetFolder
-            );
-
-            DirectoryExists = true;
-            isFolder = true;
-        }
-        else if (!fs::is_directory(
-                     targetFolder
-                 ))
-        {
-            std::cerr
-                << "Fatal Error: folder location is a file...\n"
-                << " <> try deleting the file or restarting "
-                << "the application";
-
-            DirectoryExists = false;
-            isFolder = false;
-        }
-        else {
-
-            isFolder = true;
-            DirectoryExists = true;
-        }
-
-        if (
-            DirectoryExists &&
-            isFolder
-        ) {
-            return "PASSED CHECKS";
-        }
-
-        if (
-            DirectoryExists &&
-            !isFolder
-        ) {
-            return "ERROR";
-        }
-    }
-    catch (...) {
-        return "ERROR";
-    }
-
-    return "UNEXPECTED";
 }
 
 
 int SavePassword(
-    std::string VaultName,
-    std::string Password,
-    std::string MasterPassword
+    const std::string& vaultName,
+    const SecureSecret& password,
+    const SecureSecret& masterPassword,
+    bool decoy
 )
 {
-    if (VaultName.empty()) {
+    if (vaultName.empty() || password.size() == 0 || masterPassword.size() == 0) {
         return 1;
     }
 
-    if (Password.empty()) {
+    const fs::path vaultPath = VaultRoot() / vaultName;
+    if (!VaultExists(vaultName)) {
         return 2;
     }
 
-    if (MasterPassword.empty()) {
-        return 3;
-    }
-
-    const fs::path vaultPath =
-        fs::path(VaultRoot) /
-        VaultName;
-
     try {
-
-        if (!IsValidVault(vaultPath)) {
-            return 4;
-        }
-
-        SecuritySettings securitySettings;
-
-        EncryptedData encrypted =
-            Encrypt(
-                reinterpret_cast<
-                    const unsigned char*
-                >(
-                    Password.data()
-                ),
-                Password.size(),
-                reinterpret_cast<
-                    const unsigned char*
-                >(
-                    MasterPassword.data()
-                ),
-                MasterPassword.size(),
-                securitySettings
-            );
-
-        fs::path passwordFile =
-            vaultPath / "password.cryptor";
-
-        std::ofstream file(
-            passwordFile,
-            std::ios::binary |
-            std::ios::trunc
-        );
-
-        if (!file.is_open()) {
-            return 5;
-        }
-
-        file.write(
-            reinterpret_cast<
-                const char*
-            >(
-                &encrypted.version
+        EncryptedData encrypted = Encrypt(
+            reinterpret_cast<const unsigned char*>(
+                password.data()
             ),
-            sizeof(
-                encrypted.version
-            )
-        );
-
-        file.write(
-            reinterpret_cast<
-                const char*
-            >(
-                encrypted.salt.data()
+            password.size(),
+            reinterpret_cast<const unsigned char*>(
+                masterPassword.data()
             ),
-            static_cast<
-                std::streamsize
-            >(
-                encrypted.salt.size()
-            )
+            masterPassword.size(),
+            GetSecuritySettings()
         );
 
-        file.write(
-            reinterpret_cast<
-                const char*
-            >(
-                encrypted.nonce.data()
-            ),
-            static_cast<
-                std::streamsize
-            >(
-                encrypted.nonce.size()
-            )
-        );
-
-        const std::uint64_t ciphertextSize =
-            static_cast<
-                std::uint64_t
-            >(
-                encrypted.ciphertext.size()
-            );
-
-        file.write(
-            reinterpret_cast<
-                const char*
-            >(
-                &ciphertextSize
-            ),
-            sizeof(ciphertextSize)
-        );
-
-        if (!encrypted.ciphertext.empty()) {
-
-            file.write(
-                reinterpret_cast<
-                    const char*
-                >(
-                    encrypted.ciphertext.data()
-                ),
-                static_cast<
-                    std::streamsize
-                >(
-                    encrypted.ciphertext.size()
-                )
-            );
-        }
-
-        file.flush();
-
-        if (!file.good()) {
-            file.close();
-
-            return 6;
-        }
-
-        file.close();
-
-        return 0;
+        return WriteEncryptedFile(
+            vaultPath / (decoy ? DecoyPasswordFile : PasswordFile),
+            encrypted
+        ) ? 0 : 3;
     }
     catch (...) {
-        return 7;
+        return 4;
+    }
+}
+
+
+int LoadPassword(
+    const std::string& vaultName,
+    const SecureSecret& masterPassword,
+    SecureSecret& password,
+    bool& decoy
+)
+{
+    password.Clear();
+    decoy = false;
+
+    if (vaultName.empty() || masterPassword.size() == 0) {
+        return 1;
+    }
+
+    const fs::path vaultPath = VaultRoot() / vaultName;
+    if (!VaultExists(vaultName)) {
+        return 2;
+    }
+
+    try {
+        const unsigned char* passwordData = masterPassword.data();
+
+        if (fs::is_regular_file(vaultPath / PasswordFile)) {
+            try {
+                EncryptedData encrypted;
+                if (ReadEncryptedFile(vaultPath / PasswordFile, encrypted)) {
+                    SecureSecret plaintext = Decrypt(
+                        encrypted,
+                        passwordData,
+                        masterPassword.size(),
+                        GetSecuritySettings()
+                    );
+
+                    password = std::move(plaintext);
+                    return 0;
+                }
+            }
+            catch (...) {
+            }
+        }
+
+        if (fs::is_regular_file(vaultPath / DecoyPasswordFile)) {
+            try {
+                EncryptedData encrypted;
+                if (ReadEncryptedFile(vaultPath / DecoyPasswordFile, encrypted)) {
+                    SecureSecret plaintext = Decrypt(
+                        encrypted,
+                        passwordData,
+                        masterPassword.size(),
+                        GetSecuritySettings()
+                    );
+                    decoy = true;
+                    return 1;
+                }
+            }
+            catch (...) {
+            }
+        }
+
+        decoy = true;
+        return 2;
+    }
+    catch (...) {
+        return 4;
     }
 }
