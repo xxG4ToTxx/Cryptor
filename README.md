@@ -4,7 +4,7 @@ what this is meant to do:
 
 provide anti brute force mechanisms (right now only for script kiddies)
 
-provide industry standard encryption (AES-256, chachapoly)
+use Argon2id for key derivation and XChaCha20-Poly1305 authenticated encryption
 
 wipe itself from system and memory (including leakage to hard drive and .exe task manager logs/terminal past logs)
 
@@ -16,14 +16,24 @@ outer password > (decrypting the double encrypted layers) > master password > (d
 altho ofc this can be optional and is for more paranoid users
 
 
-it also has TCATO and ATTEMPTS to capture exit events liek ctrl + C or window close
+TACTO means Two-Channel Auto-Type Obfuscation. When enabled, a saved password
+can be auto-typed by pasting its first half from the clipboard and sending the
+remaining half as simulated keystrokes. The clipboard is cleared afterward.
+TACTO requires Windows or Linux X11; Linux Wayland is not supported.
+Linux builds require X11 development files, and TACTO additionally requires
+the X11 XTest runtime library.
+
+TACTO is an input convenience, not protection against malware, keyloggers, or
+clipboard monitoring. Auto-type supports printable ASCII passwords.
+
+Temporary artifact cleanup and handled exit signals are separate features.
 
 it has support for both linux and windows, still working on translation to other lenguages which ill probably just do in platform and make it request throught another file called translate.cpp which will return the fixed translations, prb will use google translate cuz why not
 
 this is complelty offline and has yet to have a way to connect to any databse, idk nothing about networking soooo...
 
 ill implement security on startup.cpp so it checks if its safe to run or not then shut down,
-encryption.cpp is lwk complex I will add comments lol
+The encryption implementation uses Argon2id and XChaCha20-Poly1305.
 
 
 

@@ -93,14 +93,58 @@ bool OpenVaultMenu()
 
     Platform::ClearScreen();
     ShowFooter();
-    std::cout << "Vault opened.\n\n"
-              << "Stored entries:\n";
+    std::cout << "Vault opened.\n\n";
     if (storedPassword.size() == 0) {
-        std::cout << "(none)\n";
+        std::cout << "No password is stored.\n";
     }
     else {
-        WriteSecret(std::cout, storedPassword);
-        std::cout << '\n';
+        const Ghost_Features& features = GetGhostFeatures();
+        std::cout << "1: Auto-type password ("
+                  << (features.TACTO ? "on" : "off") << ")\n"
+                  << "2: Reveal password\n"
+                  << "3: Continue without revealing\n  > ";
+
+        int action = 0;
+        if (!(std::cin >> action)) {
+            std::cin.clear();
+            std::cin.ignore(
+                std::numeric_limits<std::streamsize>::max(),
+                '\n'
+            );
+            std::cout << "Invalid selection.\n";
+        }
+        else {
+            std::cin.ignore(
+                std::numeric_limits<std::streamsize>::max(),
+                '\n'
+            );
+
+            if (action == 1) {
+                if (!features.TACTO) {
+                    std::cout << "TACTO is disabled in settings.\n";
+                }
+                else {
+                    try {
+                        Platform::AutoTypePassword(
+                            storedPassword.data(),
+                            storedPassword.size()
+                        );
+                        std::cout << "Auto-type completed.\n";
+                    }
+                    catch (const std::exception& error) {
+                        std::cout << "Auto-type failed: "
+                                  << error.what() << '\n';
+                    }
+                }
+            }
+            else if (action == 2) {
+                WriteSecret(std::cout, storedPassword);
+                std::cout << '\n';
+            }
+            else if (action != 3) {
+                std::cout << "Invalid selection.\n";
+            }
+        }
     }
 
     WaitForInput();
@@ -393,9 +437,14 @@ int OpenSettings()
                           ? "on"
                           : "off")
                   << ")\n"
-                  << "3: Clear temporary artifacts on exit ("
-                  << (features.TCATO ? "on" : "off") << ")\n"
-                  << "4: Back\n  > ";
+                  << "3: Two-Channel Auto-Type Obfuscation ("
+                  << (features.TACTO ? "on" : "off") << ")\n"
+                  << "4: Clear temporary artifacts on exit ("
+                  << (features.Clear_Temporary_Artifacts_on_exit
+                          ? "on"
+                          : "off")
+                  << ")\n"
+                  << "5: Back\n  > ";
 
         int setting = 0;
         if (!(std::cin >> setting)) {
@@ -433,7 +482,11 @@ int OpenSettings()
                 !features.clear_terminal_persitant_logs_on_exit;
         }
         else if (setting == 3) {
-            features.TCATO = !features.TCATO;
+            features.TACTO = !features.TACTO;
+        }
+        else if (setting == 4) {
+            features.Clear_Temporary_Artifacts_on_exit =
+                !features.Clear_Temporary_Artifacts_on_exit;
         }
 
         return 0;

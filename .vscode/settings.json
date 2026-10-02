@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^g\\+\\+ -fdiagnostics-color=always -g main\\.cpp Startup\\.cpp VaultManager\\.cpp ui\\.cpp Encryption\\.cpp Platform\\.cpp cleanup\\.cpp settings\\.cpp -std=c\\+\\+17 -Wall -Wextra -Wpedantic -lsodium -o /tmp/cryptor-validation$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

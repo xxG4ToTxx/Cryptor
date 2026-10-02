@@ -14,6 +14,7 @@
                 "${workspaceFolder}/ui.cpp",
                 "${workspaceFolder}/Encryption.cpp",
                 "${workspaceFolder}/Platform.cpp",
+                "${workspaceFolder}/PlatformAutoType.cpp",
                 "${workspaceFolder}/cleanup.cpp",
                 "${workspaceFolder}/settings.cpp",
                 "-std=c++17",
@@ -21,6 +22,8 @@
                 "-Wextra",
                 "-Wpedantic",
                 "-lsodium",
+                "-lX11",
+                "-ldl",
                 "-o",
                 "${workspaceFolder}/app"
             ],
@@ -35,6 +38,39 @@
                 "isDefault": true
             },
             "detail": "Builds the complete Cryptor application"
+        },
+        {
+            "type": "cppbuild",
+            "label": "C/C++: build Cryptor (Windows)",
+            "command": "g++",
+            "args": [
+                "-fdiagnostics-color=always",
+                "-g",
+                "${workspaceFolder}/main.cpp",
+                "${workspaceFolder}/Startup.cpp",
+                "${workspaceFolder}/VaultManager.cpp",
+                "${workspaceFolder}/ui.cpp",
+                "${workspaceFolder}/Encryption.cpp",
+                "${workspaceFolder}/Platform.cpp",
+                "${workspaceFolder}/PlatformAutoType.cpp",
+                "${workspaceFolder}/cleanup.cpp",
+                "${workspaceFolder}/settings.cpp",
+                "-std=c++17",
+                "-Wall",
+                "-Wextra",
+                "-Wpedantic",
+                "-lsodium",
+                "-luser32",
+                "-o",
+                "${workspaceFolder}/app.exe"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "detail": "Builds Cryptor on Windows with MinGW"
         }
     ]
 }

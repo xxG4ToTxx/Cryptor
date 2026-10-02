@@ -6,92 +6,10 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 #include "Encryption.h"
 
 namespace {
-
-class SecureBuffer {
-public:
-    explicit SecureBuffer(std::size_t size)
-        : size_(size),
-          data_(static_cast<unsigned char*>(sodium_malloc(size)))
-    {
-        if (data_ == nullptr) {
-            throw std::bad_alloc();
-        }
-
-        sodium_memzero(data_, size_);
-
-        if (sodium_mlock(data_, size_) != 0) {
-            sodium_free(data_);
-            data_ = nullptr;
-            size_ = 0;
-            throw std::runtime_error("Failed to lock secure memory");
-        }
-    }
-
-    ~SecureBuffer()
-    {
-        Release();
-    }
-
-    SecureBuffer(const SecureBuffer&) = delete;
-    SecureBuffer& operator=(const SecureBuffer&) = delete;
-
-    SecureBuffer(SecureBuffer&& other) noexcept
-        : size_(other.size_),
-          data_(other.data_)
-    {
-        other.size_ = 0;
-        other.data_ = nullptr;
-    }
-
-    SecureBuffer& operator=(SecureBuffer&& other) noexcept
-    {
-        if (this != &other) {
-            Release();
-            size_ = other.size_;
-            data_ = other.data_;
-            other.size_ = 0;
-            other.data_ = nullptr;
-        }
-
-        return *this;
-    }
-
-    unsigned char* data()
-    {
-        return data_;
-    }
-
-    const unsigned char* data() const
-    {
-        return data_;
-    }
-
-    std::size_t size() const
-    {
-        return size_;
-    }
-
-private:
-    void Release() noexcept
-    {
-        if (data_ == nullptr) {
-            return;
-        }
-
-        sodium_free(data_);
-        data_ = nullptr;
-        size_ = 0;
-    }
-
-    std::size_t size_;
-    unsigned char* data_;
-};
-
 
 void ValidateSettings(const SecuritySettings& settings)
 {
@@ -106,7 +24,7 @@ void ValidateSettings(const SecuritySettings& settings)
 }
 
 
-SecureBuffer DeriveKey(
+SecureSecret DeriveKey(
     const unsigned char* password,
     std::size_t passwordLength,
     const unsigned char* salt,
@@ -119,7 +37,10 @@ SecureBuffer DeriveKey(
 
     ValidateSettings(settings);
 
-    SecureBuffer key(crypto_aead_xchacha20poly1305_ietf_KEYBYTES);
+    constexpr std::size_t keySize =
+        crypto_aead_xchacha20poly1305_ietf_KEYBYTES;
+    SecureSecret key(keySize);
+    key.Resize(keySize);
 
     if (crypto_pwhash(
             key.data(),
@@ -276,23 +197,28 @@ EncryptedData Encrypt(
         throw std::invalid_argument("Plaintext pointer is null");
     }
 
+    constexpr std::size_t authenticationTagSize =
+        crypto_aead_xchacha20poly1305_ietf_ABYTES;
+    if (plaintextLength >
+        std::numeric_limits<std::size_t>::max() - authenticationTagSize)
+    {
+        throw std::length_error("Plaintext is too large");
+    }
+
     EncryptedData result;
 
     randombytes_buf(result.salt.data(), result.salt.size());
     randombytes_buf(result.nonce.data(), result.nonce.size());
 
-    SecureBuffer key = DeriveKey(
+    SecureSecret key = DeriveKey(
         password,
         passwordLength,
         result.salt.data(),
         settings
     );
 
-    result.ciphertext.reserve(
-        plaintextLength + crypto_aead_xchacha20poly1305_ietf_ABYTES
-    );
     result.ciphertext.resize(
-        plaintextLength + crypto_aead_xchacha20poly1305_ietf_ABYTES
+        plaintextLength + authenticationTagSize
     );
 
     unsigned long long ciphertextLength = 0;
@@ -339,7 +265,7 @@ SecureSecret Decrypt(
         throw std::invalid_argument("Ciphertext is too short");
     }
 
-    SecureBuffer key = DeriveKey(
+    SecureSecret key = DeriveKey(
         password,
         passwordLength,
         encrypted.salt.data(),
@@ -376,7 +302,7 @@ SecureSecret Decrypt(
 
 SecureSecret ReadPassword(const std::string& prompt)
 {
-    SecureBuffer password(256);
+    SecureSecret password(256);
     std::size_t length = 0;
     char character = '\0';
 
@@ -406,10 +332,8 @@ SecureSecret ReadPassword(const std::string& prompt)
         throw std::invalid_argument("Password cannot be empty");
     }
 
-    SecureSecret result(256);
-    result.Resize(length);
-    std::memcpy(result.data(), password.data(), length);
-    return result;
+    password.Resize(length);
+    return password;
 }
 
 

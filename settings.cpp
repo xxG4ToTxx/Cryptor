@@ -57,15 +57,23 @@ std::string GetSettingsSection(int option)
                        ? "enabled"
                        : "disabled")
                << "\n";
+        output << "Two-Channel Auto-Type Obfuscation: "
+               << (ghostFeatures.TACTO ? "enabled" : "disabled")
+               << "\n"
+               << "Clear temporary artifacts on exit: "
+               << (ghostFeatures.Clear_Temporary_Artifacts_on_exit
+                       ? "enabled"
+                       : "disabled")
+               << "\n";
         break;
     case 3:
-        output << "Cloud and backups are not configured.\n";
+        output << "Cloud and backups are not configured still not imoplemented uhh im not messing with networking lol\n";
         break;
     case 4:
-        output << "No other settings are configured.\n";
+        output << "No other settings are configured. bruh help us makee more settings cuz im lwk too lazy\n";
         break;
     default:
-        output << "Invalid selection.\n";
+        output << "Invalid selection, try choosing valid  number?!\n";
         break;
     }
 

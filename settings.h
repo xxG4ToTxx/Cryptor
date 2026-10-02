@@ -17,7 +17,8 @@ struct SecuritySettings {
 struct Ghost_Features {
     int Clear_Clipboard_timer_SECONDS = 40;
     bool clear_terminal_persitant_logs_on_exit = true;
-    bool TCATO = true;
+    bool TACTO = true;
+    bool Clear_Temporary_Artifacts_on_exit = true;
 };
 
 const SecuritySettings& GetSecuritySettings();

@@ -48,7 +48,7 @@ void Run()
 
     LockSession();
 
-    if (GetGhostFeatures().TCATO) {
+    if (GetGhostFeatures().Clear_Temporary_Artifacts_on_exit) {
         try {
             const std::filesystem::path root = Platform::VaultDirectory();
             if (std::filesystem::is_directory(root)) {
